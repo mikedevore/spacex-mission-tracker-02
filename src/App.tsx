@@ -10,942 +10,17 @@ import UpcomingMissionsPanel from './components/UpcomingMissionsPanel';
 import { TrajectoryChart } from './components/TrajectoryChart';
 import { initAuth, googleSignIn, logout, getAccessToken } from './auth';
 import { backupToDrive } from './driveBackup';
+import TrackerProPage from './components/TrackerProPage';
 
 
 
-// Client-side local storage cache helpers with a 10-minute TTL to respect API rate limits
-const CACHE_TTL = 10 * 60 * 1000; // 10 minutes cache lifetime
+import { CACHE_TTL, getCachedData, getStaleCachedData, setCachedData, formatDate, normalizeYouTubeUrl, youtubeUrl, extractYoutubeId, patchImage, inferVehicle, launchStatusLabel, launchSourceLabel, missionRocketName, missionPadName, missionLandingSummary } from "./lib/utils";
+import { LANDING_VIDEOS, SPACEX_HISTORIC_EVENTS, FALLBACK_UPCOMING, FALLBACK_NEWS } from "./lib/constants";
+import LowerFeaturesArea from "./components/LowerFeaturesArea";
 
-function getCachedData<T>(key: string): T | null {
-  try {
-    const itemStr = localStorage.getItem(key);
-    if (!itemStr) return null;
-    const item = JSON.parse(itemStr);
-    const now = Date.now();
-    if (now - item.timestamp < CACHE_TTL) {
-      return item.data;
-    }
-  } catch (_) {
-    // Graceful fail
-  }
-  return null;
-}
-
-function getStaleCachedData<T>(key: string): T | null {
-  try {
-    const itemStr = localStorage.getItem(key);
-    if (!itemStr) return null;
-    const item = JSON.parse(itemStr);
-    return item.data;
-  } catch (_) {
-    // Graceful fail
-  }
-  return null;
-}
-
-function setCachedData<T>(key: string, data: T) {
-  try {
-    const item = {
-      data,
-      timestamp: Date.now()
-    };
-    localStorage.setItem(key, JSON.stringify(item));
-  } catch (_) {
-    // Safely ignore space limits
-  }
-}
-
-// Helper functions in sync with master requirements
-function formatDate(value: string | number) {
-  if (!value) return "Date unavailable";
-  return new Date(value).toLocaleString([], { 
-    year: "numeric", 
-    month: "short", 
-    day: "numeric", 
-    hour: "numeric", 
-    minute: "2-digit" 
-  });
-}
-
-function normalizeYouTubeUrl(value: any): string {
-  if (typeof value !== "string") return "";
-  const raw = value.trim();
-  if (!raw) return "";
-
-  if (/^[A-Za-z0-9_-]{8,20}$/.test(raw) && !raw.includes("/") && !raw.includes(".")) {
-    return `https://www.youtube.com/watch?v=${raw}`;
-  }
-
-  try {
-    const url = new URL(raw);
-
-    if (url.hostname.includes("youtu.be")) {
-      const id = url.pathname.replace("/", "").trim();
-      return id ? `https://www.youtube.com/watch?v=${id}` : "";
-    }
-
-    if (url.hostname.includes("youtube.com")) {
-      const watchId = url.searchParams.get("v");
-      if (watchId) return `https://www.youtube.com/watch?v=${watchId}`;
-
-      const embedMatch = url.pathname.match(/\/embed\/([A-Za-z0-9_-]+)/);
-      if (embedMatch) return `https://www.youtube.com/watch?v=${embedMatch[1]}`;
-
-      const shortsMatch = url.pathname.match(/\/shorts\/([A-Za-z0-9_-]+)/);
-      if (shortsMatch) return `https://www.youtube.com/watch?v=${shortsMatch[1]}`;
-    }
-  } catch (error) {
-    return "";
-  }
-
-  return "";
-}
-
-function youtubeUrl(launch: any): string {
-  const fromId = normalizeYouTubeUrl(launch?.links?.youtube_id);
-  if (fromId) return fromId;
-
-  const fromWebcast = normalizeYouTubeUrl(launch?.links?.webcast);
-  if (fromWebcast) return fromWebcast;
-
-  const fromLL2 = normalizeYouTubeUrl(launch?.ll2?.webcast);
-  if (fromLL2) return fromLL2;
-
-  return "";
-}
-
-function extractYoutubeId(url: string | null | undefined): string {
-  if (!url) return "";
-  const normalized = normalizeYouTubeUrl(url);
-  if (!normalized) return "";
-  try {
-    const parsed = new URL(normalized);
-    return parsed.searchParams.get("v") || "";
-  } catch (_) {
-    return "";
-  }
-}
-
-function patchImage(launch: any): string {
-  return launch?.links?.patch?.large || launch?.links?.patch?.small || "";
-}
-
-function inferVehicle(name = "") {
-  const n = name.toLowerCase();
-  if (n.includes("starship") || n.includes("ift")) return "Starship";
-  if (n.includes("heavy")) return "Falcon Heavy";
-  return "Falcon 9";
-}
-
-function launchStatusLabel(mission: any) {
-  if (mission.success === true) return "SUCCESS";
-  if (mission.success === false) return "FAILURE";
-  return (mission?.ll2?.status || mission?.rll?.status || "SCHEDULED").toUpperCase();
-}
-
-function launchSourceLabel(mission: any) {
-  if (mission.rll) return "RocketLaunch.Live Backup";
-  if (mission.ll2) return "Launch Library 2";
-  return "SpaceXData Archive";
-}
-
-function missionRocketName(mission: any) {
-  return mission?.ll2?.rocket || mission?.rll?.vehicle || mission?.rocket_name || "Falcon 9";
-}
-
-function missionPadName(mission: any) {
-  return mission?.ll2?.padName || mission?.rll?.padName || mission?.launchpad_name || "SLC-40, Cape Canaveral";
-}
-
-// Epic Landing Videos with detailed telemetry summaries
-const LANDING_VIDEOS = [
-  {
-    id: "YC87WmFN_As",
-    title: "Starship Flight 5 Booster Catch",
-    channel: "SpaceX",
-    type: "Mechazilla Catch",
-    booster: "B12 Super Heavy",
-    vehicle: "Starship",
-    mission: "Flight 5",
-    date: "2024-10-13",
-    success: true,
-    pad: "Launch Mount - Starbase, TX",
-    weather: "Clear, wind 4 km/h",
-    featured: true,
-    landingType: "Mechazilla Tower Catch",
-    timeline: [
-      { id: "ascent", label: "Ascent Profile", status: "Nominal", time: "T+ 0:00" },
-      { id: "stage_sep", label: "Hot-Stage Separation", status: "Nominal", time: "T+ 2:42" },
-      { id: "boostback", label: "Boostback Burn", status: "Nominal", time: "T+ 3:05" },
-      { id: "entry_burn", label: "Entry Burn", status: "Nominal", time: "T+ 6:40" },
-      { id: "landing_burn", label: "Landing Burn Init", status: "Nominal", time: "T+ 7:31" },
-      { id: "touchdown", label: "Super Heavy Tower Capture", status: "Nominal", time: "T+ 7:45" }
-    ]
-  },
-  {
-    id: "LHqLz9ni0Bo",
-    title: "Falcon 9 Onboard Droneship Landing",
-    channel: "SpaceX",
-    type: "Onboard Droneship",
-    booster: "B1046 Block 5",
-    vehicle: "Falcon 9",
-    mission: "Telstar 19V",
-    date: "2018-07-22",
-    success: true,
-    pad: "Of Course I Still Love You (ASDS)",
-    weather: "Moderate swells, misty",
-    featured: false,
-    landingType: "ASDS Sea Landing",
-    timeline: [
-      { id: "ascent", label: "Liftoff & Ascent", status: "Nominal", time: "T+ 0:00" },
-      { id: "stage_sep", label: "Stage Separation", status: "Nominal", time: "T+ 2:33" },
-      { id: "boostback", label: "No Boostback (Downrange)", status: "Skipped", time: "N/A" },
-      { id: "entry_burn", label: "Entry Burn Execution", status: "Nominal", time: "T+ 6:15" },
-      { id: "landing_burn", label: "Single Engine Landing Burn", status: "Nominal", time: "T+ 8:08" },
-      { id: "touchdown", label: "ASDS Deck Touchdown", status: "Nominal", time: "T+ 8:31" }
-    ]
-  },
-  {
-    id: "lXgLyCYuYA4",
-    title: "CRS-8: First Successful Sea Landing",
-    channel: "SpaceX",
-    type: "Historic Droneship",
-    booster: "B1021.1",
-    vehicle: "Falcon 9",
-    mission: "CRS-8",
-    date: "2016-04-08",
-    success: true,
-    pad: "Of Course I Still Love You (ASDS)",
-    weather: "Calm sea swell, light breeze",
-    featured: false,
-    landingType: "ASDS Sea Landing",
-    timeline: [
-      { id: "ascent", label: "Ascent Profile", status: "Nominal", time: "T+ 0:00" },
-      { id: "stage_sep", label: "Stage Separation", status: "Nominal", time: "T+ 2:30" },
-      { id: "boostback", label: "Partial Boostback", status: "Nominal", time: "T+ 2:45" },
-      { id: "entry_burn", label: "Atmospheric Entry Burn", status: "Nominal", time: "T+ 6:45" },
-      { id: "landing_burn", label: "Landing Burn Init", status: "Nominal", time: "T+ 8:12" },
-      { id: "touchdown", label: "Historic ASDS Touchdown", status: "Nominal", time: "T+ 8:35" }
-    ]
-  },
-  {
-    id: "Z4TXCZG_NEY",
-    title: "Falcon Heavy Test Flight Dual Landing",
-    channel: "SpaceX",
-    type: "LZ-1 & LZ-2",
-    booster: "B1023.1 & B1025.1",
-    vehicle: "Falcon Heavy",
-    mission: "Demo Flight",
-    date: "2018-02-06",
-    success: true,
-    pad: "Landing Zone 1 & 2 (Ground)",
-    weather: "Optimal, light crosswinds",
-    featured: true,
-    landingType: "RTLS Ground landing",
-    timeline: [
-      { id: "ascent", label: "Ascent Profile", status: "Nominal", time: "T+ 0:00" },
-      { id: "stage_sep", label: "Dual Booster Separation", status: "Nominal", time: "T+ 2:33" },
-      { id: "boostback", label: "Dual Boostback Burn", status: "Nominal", time: "T+ 3:11" },
-      { id: "entry_burn", label: "Dual Entry Burn", status: "Nominal", time: "T+ 6:42" },
-      { id: "landing_burn", label: "Dual Landing Burn", status: "Nominal", time: "T+ 7:58" },
-      { id: "touchdown", label: "Synchronized Ground Landing", status: "Nominal", time: "T+ 8:15" }
-    ]
-  },
-  {
-    id: "wbSwFU6tY1c",
-    title: "Falcon 9 First Stage LZ-1 Landing",
-    channel: "SpaceX",
-    type: "Historic LZ-1",
-    booster: "B1019.1",
-    vehicle: "Falcon 9",
-    mission: "Orbcomm-2",
-    date: "2015-12-21",
-    success: true,
-    pad: "Landing Zone 1 - Cape Canaveral",
-    weather: "Clear, pristine nighttime",
-    featured: false,
-    landingType: "RTLS Ground landing",
-    timeline: [
-      { id: "ascent", label: "Liftoff & Ascent", status: "Nominal", time: "T+ 0:00" },
-      { id: "stage_sep", label: "Stage Separation", status: "Nominal", time: "T+ 2:24" },
-      { id: "boostback", label: "Full Boostback Burn", status: "Nominal", time: "T+ 2:48" },
-      { id: "entry_burn", label: "Atmospheric Entry Burn", status: "Nominal", time: "T+ 8:00" },
-      { id: "landing_burn", label: "Landing Burn Init", status: "Nominal", time: "T+ 9:32" },
-      { id: "touchdown", label: "Historic Ground Touchdown", status: "Nominal", time: "T+ 9:44" }
-    ]
-  },
-  {
-    id: "1_FXVjqZIQM",
-    title: "SAOCOM 1A West Coast Landing",
-    channel: "SpaceX",
-    type: "LZ-4 Landing",
-    booster: "B1048.1",
-    vehicle: "Falcon 9",
-    mission: "SAOCOM 1A",
-    date: "2018-10-08",
-    success: true,
-    pad: "Landing Zone 4 - Vandenberg",
-    weather: "Mild fog, low visibility",
-    featured: false,
-    landingType: "RTLS Ground landing",
-    timeline: [
-      { id: "ascent", label: "Ascent Profile", status: "Nominal", time: "T+ 0:00" },
-      { id: "stage_sep", label: "Stage Separation", status: "Nominal", time: "T+ 2:20" },
-      { id: "boostback", label: "RTLS Boostback", status: "Nominal", time: "T+ 2:38" },
-      { id: "entry_burn", label: "Atmospheric Entry Burn", status: "Nominal", time: "T+ 6:02" },
-      { id: "landing_burn", label: "Center-Engine Landing Burn", status: "Nominal", time: "T+ 7:38" },
-      { id: "touchdown", label: "Vandenberg Ground Touchdown", status: "Nominal", time: "T+ 7:45" }
-    ]
-  },
-  {
-    id: "OnoNITE-clc",
-    title: "Falcon 9 Transporter-2 Landing",
-    channel: "SpaceX",
-    type: "LZ-1 Landing",
-    booster: "B1060.8",
-    vehicle: "Falcon 9",
-    mission: "Transporter-2",
-    date: "2021-06-30",
-    success: true,
-    pad: "Landing Zone 1 - Cape Canaveral",
-    weather: "Scattered clouds, humid",
-    featured: false,
-    landingType: "RTLS Ground landing",
-    timeline: [
-      { id: "ascent", label: "Ascent Profile", status: "Nominal", time: "T+ 0:00" },
-      { id: "stage_sep", label: "Stage Separation", status: "Nominal", time: "T+ 2:28" },
-      { id: "boostback", label: "Boostback Burn", status: "Nominal", time: "T+ 2:44" },
-      { id: "entry_burn", label: "Atmospheric Entry", status: "Nominal", time: "T+ 6:21" },
-      { id: "landing_burn", label: "Propulsive Deceleration", status: "Nominal", time: "T+ 7:51" },
-      { id: "touchdown", label: "LZ-1 Ground Touchdown", status: "Nominal", time: "T+ 8:04" }
-    ]
-  },
-  {
-    id: "sB_nEtZxPOA",
-    title: "Starship SN15 High-Altitude Landing",
-    channel: "SpaceX",
-    type: "Starship Landing",
-    booster: "SN15 Upper Stage",
-    vehicle: "Starship",
-    mission: "SN15 Test Flight",
-    date: "2021-05-05",
-    success: true,
-    pad: "Starbase Landing Pad, TX",
-    weather: "Breezy gulf winds",
-    featured: false,
-    landingType: "Starbase Pad Ground touchdown",
-    timeline: [
-      { id: "ascent", label: "Raptor Powered Ascent", status: "Nominal", time: "T+ 0:00" },
-      { id: "stage_sep", label: "Sequential Engine Cutdowns", status: "Nominal", time: "T+ 4:15" },
-      { id: "boostback", label: "Bellyflop Descent Control", status: "Nominal", time: "T+ 5:20" },
-      { id: "entry_burn", label: "Aerodynamic Maneuver", status: "Nominal", time: "T+ 5:45" },
-      { id: "landing_burn", label: "Raptor Flip-up & Gimbals", status: "Nominal", time: "T+ 5:58" },
-      { id: "touchdown", label: "Touchdown and Venting", status: "Nominal", time: "T+ 6:08" }
-    ]
-  },
-  {
-    id: "bvim4rsNHkQ",
-    title: "Falcon Heavy Arabsat-6A Landing",
-    channel: "SpaceX",
-    type: "LZ-1 & LZ-2",
-    booster: "B1052 & B1053 Side Boosters",
-    vehicle: "Falcon Heavy",
-    mission: "Arabsat-6A",
-    date: "2019-04-11",
-    success: true,
-    pad: "Landing Zone 1 & 2 (Ground)",
-    weather: "Cool, crystal clear night",
-    featured: false,
-    landingType: "RTLS Ground landing",
-    timeline: [
-      { id: "ascent", label: "Maximum Dynamic Pressure", status: "Nominal", time: "T+ 0:00" },
-      { id: "stage_sep", label: "Dual Booster Separation", status: "Nominal", time: "T+ 2:38" },
-      { id: "boostback", label: "Synchronized Boostback Burn", status: "Nominal", time: "T+ 3:20" },
-      { id: "entry_burn", label: "Booster Atmospheric Entry", status: "Nominal", time: "T+ 6:48" },
-      { id: "landing_burn", label: "Parallel Ground Land Burn", status: "Nominal", time: "T+ 8:02" },
-      { id: "touchdown", label: "Perfect Dual Touchdown", status: "Nominal", time: "T+ 8:17" }
-    ]
-  },
-  {
-    id: "pYHQCxXIt3M",
-    title: "Starship Flight 6 Super Heavy Catch",
-    channel: "SpaceX",
-    type: "Mechazilla Catch",
-    booster: "B13 Super Heavy",
-    vehicle: "Starship",
-    mission: "Flight 6",
-    date: "2024-11-19",
-    success: false,
-    pad: "Gulf of Mexico (Water Soft Catch)",
-    weather: "Sunset, overcast, choppy waters",
-    featured: false,
-    landingType: "Water Catch (Catch Abort)",
-    timeline: [
-      { id: "ascent", label: "Super Heavy Ascent Boost", status: "Nominal", time: "T+ 0:00" },
-      { id: "stage_sep", label: "Hot-Stage Separation", status: "Nominal", time: "T+ 2:40" },
-      { id: "boostback", label: "Boostback Burn", status: "Nominal", time: "T+ 2:50" },
-      { id: "entry_burn", label: "Entry Burn Segment", status: "Nominal", time: "T+ 6:23" },
-      { id: "landing_burn", label: "Booster Catch Abort Decided", status: "Aborted", time: "T+ 7:00" },
-      { id: "touchdown", label: "Indian Ocean Soft Splashdown", status: "Loss of Booster", time: "T+ 7:15" }
-    ]
-  },
-  {
-    id: "A0FZIwabctw",
-    title: "Falcon 9 NROL-108 Landing",
-    channel: "SpaceX",
-    type: "LZ-1 Landing",
-    booster: "B1059.5",
-    vehicle: "Falcon 9",
-    mission: "NROL-108",
-    date: "2020-12-19",
-    success: true,
-    pad: "Landing Zone 1 - Cape Canaveral",
-    weather: "Windy, heavy overcast",
-    featured: false,
-    landingType: "RTLS Ground landing",
-    timeline: [
-      { id: "ascent", label: "Asymmetrical Ascent", status: "Nominal", time: "T+ 0:00" },
-      { id: "stage_sep", label: "Stage Separation", status: "Nominal", time: "T+ 2:18" },
-      { id: "boostback", label: "RTLS Boostback", status: "Nominal", time: "T+ 2:32" },
-      { id: "entry_burn", label: "Re-entry Burn Profile", status: "Nominal", time: "T+ 5:54" },
-      { id: "landing_burn", label: "Single Engine Landing", status: "Nominal", time: "T+ 8:05" },
-      { id: "touchdown", label: "LZ-1 Ground Touchdown", status: "Nominal", time: "T+ 8:15" }
-    ]
-  },
-  {
-    id: "C3b2ZqS3X8Y",
-    title: "Falcon 9 Crew-1 Landing",
-    channel: "SpaceX",
-    type: "Droneship Catch",
-    booster: "B1061.1",
-    vehicle: "Falcon 9",
-    mission: "Crew-1",
-    date: "2020-11-15",
-    success: true,
-    pad: "Just Read the Instructions (ASDS)",
-    weather: "Breezy night sea state",
-    featured: false,
-    landingType: "ASDS Sea Landing",
-    timeline: [
-      { id: "ascent", label: "Manned Ascent Profile", status: "Nominal", time: "T+ 0:00" },
-      { id: "stage_sep", label: "Stage Separation", status: "Nominal", time: "T+ 2:36" },
-      { id: "boostback", label: "Downrange Descent Coast", status: "Skipped", time: "N/A" },
-      { id: "entry_burn", label: "Atmospheric Re-entry", status: "Nominal", time: "T+ 6:30" },
-      { id: "landing_burn", label: "Plume Interaction Burn", status: "Nominal", time: "T+ 8:43" },
-      { id: "touchdown", label: "Night Droneship Touchdown", status: "Nominal", time: "T+ 9:02" }
-    ]
-  },
-  {
-    id: "7v4k22WpWvo",
-    title: "Falcon 9 GPS III SV04 Landing",
-    channel: "SpaceX",
-    type: "Droneship Catch",
-    booster: "B1062.1",
-    vehicle: "Falcon 9",
-    mission: "GPS III SV04",
-    date: "2020-11-05",
-    success: true,
-    pad: "Of Course I Still Love You (ASDS)",
-    weather: "Overcast, slight waves",
-    featured: false,
-    landingType: "ASDS Sea Landing",
-    timeline: [
-      { id: "ascent", label: "High Energy Ascent", status: "Nominal", time: "T+ 0:00" },
-      { id: "stage_sep", label: "Stage Separation", status: "Nominal", time: "T+ 2:42" },
-      { id: "boostback", label: "Ascent Coast", status: "Skipped", time: "N/A" },
-      { id: "entry_burn", label: "Dense Entry Burn", status: "Nominal", time: "T+ 6:41" },
-      { id: "landing_burn", label: "Gimbal Ring Correction", status: "Nominal", time: "T+ 8:14" },
-      { id: "touchdown", label: "Precision Sea Landing", status: "Nominal", time: "T+ 8:36" }
-    ]
-  },
-  {
-    id: "0a_00nJ_Y88",
-    title: "Starship Flight 4 Splashdown",
-    channel: "SpaceX",
-    type: "Ocean Splashdown",
-    booster: "B11 Super Heavy",
-    vehicle: "Starship",
-    mission: "Flight 4",
-    date: "2024-06-06",
-    success: true,
-    pad: "Gulf of Mexico (Virtual Pad)",
-    weather: "Heavy fog, clear waves",
-    featured: false,
-    landingType: "Soft Sea-Contact Splashdown",
-    timeline: [
-      { id: "ascent", label: "Super Heavy Booster Launch", status: "Nominal", time: "T+ 0:00" },
-      { id: "stage_sep", label: "Hot-Staging Cutover", status: "Nominal", time: "T+ 2:40" },
-      { id: "boostback", label: "Booster Boostback Burn", status: "Nominal", time: "T+ 3:12" },
-      { id: "entry_burn", label: "Booster Entry Burn", status: "Nominal", time: "T+ 6:43" },
-      { id: "landing_burn", label: "Trans-Landing Burn", status: "Nominal", time: "T+ 7:22" },
-      { id: "touchdown", label: "Precision Hover Splashdown", status: "Nominal", time: "T+ 7:31" }
-    ]
-  },
-  {
-    id: "xYWzF_1d7A8",
-    title: "Falcon 9 Sentinel-6 Michael Freilich Landing",
-    channel: "SpaceX",
-    type: "Vandenberg LZ-4",
-    booster: "B1063.1",
-    vehicle: "Falcon 9",
-    mission: "Sentinel-6",
-    date: "2020-11-21",
-    success: true,
-    pad: "Landing Zone 4 - Vandenberg SFB",
-    weather: "Clear, pristine coastal winds",
-    featured: false,
-    landingType: "RTLS Ground landing",
-    timeline: [
-      { id: "ascent", label: "Pacific Orbit Path", status: "Nominal", time: "T+ 0:00" },
-      { id: "stage_sep", label: "Inertial Separation", status: "Nominal", time: "T+ 2:24" },
-      { id: "boostback", label: "Propulsive Reverse Burn", status: "Nominal", time: "T+ 2:45" },
-      { id: "entry_burn", label: "Braking Core Burn", status: "Nominal", time: "T+ 6:13" },
-      { id: "landing_burn", label: "Final Gravity Descent", status: "Nominal", time: "T+ 8:12" },
-      { id: "touchdown", label: "LZ-4 Ground Touchdown", status: "Nominal", time: "T+ 8:27" }
-    ]
-  },
-  {
-    id: "_T74T7yPIfc",
-    title: "Falcon Heavy USSF-44 Dual Landing",
-    channel: "SpaceX",
-    type: "LZ-1 & LZ-2",
-    booster: "B1064 & B1065 Side Boosters",
-    vehicle: "Falcon Heavy",
-    mission: "USSF-44",
-    date: "2022-11-01",
-    success: true,
-    pad: "Landing Zone 1 & 2 (Ground)",
-    weather: "Overcast, slight tailwinds",
-    featured: false,
-    landingType: "RTLS Ground landing",
-    timeline: [
-      { id: "ascent", label: "Classified Profile Ascent", status: "Nominal", time: "T+ 0:00" },
-      { id: "stage_sep", label: "Dual Booster Separation", status: "Nominal", time: "T+ 2:30" },
-      { id: "boostback", label: "Dual Booster RTLS Ignite", status: "Nominal", time: "T+ 3:00" },
-      { id: "entry_burn", label: "Simultaneous Core Braking", status: "Nominal", time: "T+ 6:35" },
-      { id: "landing_burn", label: "Dual 3-Engine Retardation", status: "Nominal", time: "T+ 8:05" },
-      { id: "touchdown", label: "Simultaneous LZ Touchdown", status: "Nominal", time: "T+ 8:22" }
-    ]
-  },
-  {
-    id: "ru1A11lmbA4",
-    title: "Falcon 9 Iridium-1 Landing",
-    channel: "SpaceX",
-    type: "West Coast LZ",
-    booster: "B1029.2",
-    vehicle: "Falcon 9",
-    mission: "Iridium-1",
-    date: "2017-01-14",
-    success: true,
-    pad: "Just Read the Instructions (ASDS)",
-    weather: "Heavy fog, medium waves",
-    featured: false,
-    landingType: "ASDS Sea Landing",
-    timeline: [
-      { id: "ascent", label: "Polar Route Liftoff", status: "Nominal", time: "T+ 0:00" },
-      { id: "stage_sep", label: "Pristine Stage Separation", status: "Nominal", time: "T+ 2:27" },
-      { id: "boostback", label: "Downrange Drift Phase", status: "Skipped", time: "N/A" },
-      { id: "entry_burn", label: "Core Plume Braking", status: "Nominal", time: "T+ 6:21" },
-      { id: "landing_burn", label: "Center-Engine Capture Spark", status: "Nominal", time: "T+ 8:14" },
-      { id: "touchdown", label: "Pacific ASDS Sea Touchdown", status: "Nominal", time: "T+ 8:26" }
-    ]
-  }
-];
-
-const SPACEX_HISTORIC_EVENTS = [
-  {
-    id: "hist-starship-flight12",
-    title: "Starship Flight 12 Dual Catch",
-    date: "May 10, 2026",
-    dateUtc: "2026-05-10T13:40:00.000Z",
-    video_id: "YC87WmFN_As",
-    vehicle: "Starship & Super Heavy V2",
-    launchpad: "Starbase OLP-1, Boca Chica, TX",
-    details: "Demonstrating full rapid reusability, Flight 12 achieved the unprecedented milestone of catching both the Super Heavy booster and the Starship upper stage back at the launch mount.",
-    coreSerial: "B20 Booster & S36 Ship",
-    flightNum: 2,
-    reused: true,
-    landingType: "Mechazilla Tower Catch"
-  },
-  {
-    id: "hist-starship-flight11",
-    title: "Starship Flight 11 Orbital Transfer",
-    date: "Feb 22, 2026",
-    dateUtc: "2026-02-22T14:00:00.000Z",
-    video_id: "pYHQCxXIt3M",
-    vehicle: "Starship & Super Heavy V2",
-    launchpad: "Starbase OLP-1, Boca Chica, TX",
-    details: "Flight 11 marked a major step towards Artemis by completing an orbital propellant transfer demonstration between Starship and a target vehicle.",
-    coreSerial: "B18 Booster & S33 Ship",
-    flightNum: 1,
-    reused: false,
-    landingType: "Mechazilla Tower Catch"
-  },
-  {
-    id: "hist-starship-flight10",
-    title: "Starship Flight 10 Payload Deployment",
-    date: "Nov 30, 2025",
-    dateUtc: "2025-11-30T13:15:00.000Z",
-    video_id: "0a_00nJ_Y88",
-    vehicle: "Starship & Super Heavy V1",
-    launchpad: "Starbase OLP-1, Boca Chica, TX",
-    details: "Flight 10 successfully opened its payload bay door in orbit, deploying the first batch of full-scale Starlink V2 satellites before re-entering the atmosphere.",
-    coreSerial: "B17 Booster & S31 Ship",
-    flightNum: 2,
-    reused: true,
-    landingType: "Mechazilla Tower Catch"
-  },
-  {
-    id: "hist-starship-flight9",
-    title: "Starship Flight 9 Dual Ship Catch Attempt",
-    date: "Aug 15, 2025",
-    dateUtc: "2025-08-15T12:00:00.000Z",
-    video_id: "YC87WmFN_As",
-    vehicle: "Starship & Super Heavy V1",
-    launchpad: "Starbase OLP-1, Boca Chica, TX",
-    details: "Flight 9 featured a full orbital profile and the first attempt to catch the Starship upper stage, paving the way for complete rapid reusability.",
-    coreSerial: "B16 Booster & S30 Ship",
-    flightNum: 1,
-    reused: false,
-    landingType: "Mechazilla Tower Catch"
-  },
-  {
-    id: "hist-crew9",
-    title: "Crew-9: ISS Expedition 72/73",
-    date: "Sep 28, 2024",
-    dateUtc: "2024-09-28T17:17:00.000Z",
-    video_id: "7B_Wty9r4p4",
-    vehicle: "Falcon 9 Block 5 (Crew Dragon Freedom)",
-    launchpad: "SLC-40, Cape Canaveral, FL",
-    details: "Crew-9 launched to the International Space Station, notable for launching from SLC-40 for the first time for a crewed mission and returning two Starliner astronauts.",
-    coreSerial: "B1085",
-    flightNum: 2,
-    reused: true,
-    landingType: "LZ-1 Ground Landing"
-  },
-  {
-    id: "hist-polaris-dawn",
-    title: "Polaris Dawn: First Commercial Spacewalk",
-    date: "Sep 12, 2024",
-    dateUtc: "2024-09-12T10:12:00.000Z",
-    video_id: "7B_Wty9r4p4",
-    vehicle: "Falcon 9 Block 5 (Crew Dragon Resilience)",
-    launchpad: "LC-39A, Kennedy Space Center, FL",
-    details: "The Polaris Dawn mission achieved the highest Earth orbit since the Apollo program and conducted the first-ever commercial Extravehicular Activity (EVA), using newly designed SpaceX EVA suits.",
-    coreSerial: "B1083",
-    flightNum: 4,
-    reused: true,
-    landingType: "Just Read the Instructions"
-  },
-  {
-    id: "hist-crew8",
-    title: "Crew-8: ISS Expedition 71",
-    date: "Mar 3, 2024",
-    dateUtc: "2024-03-03T03:53:00.000Z",
-    video_id: "bnqqOBrPucA",
-    vehicle: "Falcon 9 Block 5 (Crew Dragon Endeavour)",
-    launchpad: "LC-39A, Kennedy Space Center, FL",
-    details: "Crew-8 carried four astronauts to the International Space Station for a six-month science mission, marking the eighth operational crew flight for NASA.",
-    coreSerial: "B1083",
-    flightNum: 1,
-    reused: false,
-    landingType: "LZ-1 Ground Landing"
-  },
-  {
-    id: "hist-starship-flight5",
-    title: "Starship Flight 5 Tower Catch",
-    date: "Oct 13, 2024",
-    dateUtc: "2024-10-13T12:25:00.000Z",
-    video_id: "YC87WmFN_As",
-    vehicle: "Starship & Super Heavy B12",
-    launchpad: "Starbase OLP-1, Boca Chica, TX",
-    details: "During the Starship Flight 5 campaign, SpaceX achieved a breathtaking world-first by catching the 232-foot-tall Super Heavy booster back at the launch mount using the tower's 'Mechazilla' chopstick arms.",
-    coreSerial: "B12 Booster",
-    flightNum: 1,
-    reused: false,
-    landingType: "Mechazilla Tower Catch"
-  },
-  {
-    id: "hist-crew1",
-    title: "Crew-1: First Operational Crew Mission",
-    date: "Nov 15, 2020",
-    dateUtc: "2020-11-15T00:27:00.000Z",
-    video_id: "bnqqOBrPucA",
-    vehicle: "Falcon 9 Block 5 (Crew Dragon Resilience)",
-    launchpad: "LC-39A, Kennedy Space Center, FL",
-    details: "Following the successful Demo-2 test flight, Crew-1 marked the first operational crewed flight of the Dragon spacecraft, carrying four astronauts to the ISS for a full-duration six-month science mission.",
-    coreSerial: "B1061",
-    flightNum: 1,
-    reused: false,
-    landingType: "Just Read the Instructions"
-  },
-  {
-    id: "hist-demo2",
-    title: "Demo-2 First Crewed Flight",
-    date: "May 30, 2020",
-    dateUtc: "2020-05-30T19:22:00.000Z",
-    video_id: "bZOPV5pU_bY",
-    vehicle: "Falcon 9 Block 5 (Crew Dragon)",
-    launchpad: "LC-39A, Kennedy Space Center, FL",
-    details: "SpaceX successfully launched NASA astronauts Bob Behnken and Doug Hurley on Demo-2, restoring domestic astronaut launch capability to American soil for the first time since the Space Shuttle's retirement in 2011.",
-    coreSerial: "B1058",
-    flightNum: 1,
-    reused: false,
-    landingType: "Of Course I Still Love You"
-  },
-  {
-    id: "hist-falconheavy-test",
-    title: "Falcon Heavy Maiden Test Flight",
-    date: "Feb 6, 2018",
-    dateUtc: "2018-02-06T20:45:00.000Z",
-    video_id: "Z4TXCZG_NEY",
-    vehicle: "Falcon Heavy (B1033 / B1023 / B1025)",
-    launchpad: "LC-39A, Kennedy Space Center, FL",
-    details: "The highly anticipated inaugural launch of Falcon Heavy lifted Elon Musk's cherry red Tesla Roadster dummy payload into a heliocentric helio-orbit, featuring the famous synchronized dual landing of the side boosters at Landing Zones 1 and 2.",
-    coreSerial: "B1023 / B1025 side boosters",
-    flightNum: 2,
-    reused: true,
-    landingType: "LZ-1 & LZ-2 Dual Landing"
-  },
-  {
-    id: "hist-arabsat6a",
-    title: "Falcon Heavy: Arabsat-6A Triple Landing",
-    date: "Apr 11, 2019",
-    dateUtc: "2019-04-11T22:35:00.000Z",
-    video_id: "TXMGu2d8c8g",
-    vehicle: "Falcon Heavy (B1055/B1052/B1053)",
-    launchpad: "LC-39A, Kennedy Space Center, FL",
-    details: "The first commercial deployment for Falcon Heavy marked a massive milestone when both side boosters landed successfully at LZ-1 and LZ-2, shortly followed by the center core landing on the drone ship Of Course I Still Love You.",
-    coreSerial: "B1055 (Center Core)",
-    flightNum: 1,
-    reused: false,
-    landingType: "LZ-1, LZ-2, and OCISLY Drone Ship"
-  },
-  {
-    id: "hist-sn15-landing",
-    title: "Starship SN15 High-Altitude Landing",
-    date: "May 5, 2021",
-    dateUtc: "2021-05-05T22:24:00.000Z",
-    video_id: "sB_nEtZxPOA",
-    vehicle: "Starship Prototype SN15",
-    launchpad: "Starbase Suborbital Pad A, TX",
-    details: "Following several explosive suborbital flight lessons, Starship SN15 successfully launched to 10 km altitude, performed a belly-flop descent maneuver using aerodynamic flaps, and ignited three Raptor engines to achieve a perfect touchdown at Boca Chica.",
-    coreSerial: "SN15 Prototype",
-    flightNum: 1,
-    reused: false,
-    landingType: "Starbase Landing Pad"
-  },
-  {
-    id: "hist-orbcomm2",
-    title: "Orbcomm-2: First Ever Booster Return",
-    date: "Dec 21, 2015",
-    dateUtc: "2015-12-21T18:33:00.000Z",
-    video_id: "ZCBE8ocOkAQ",
-    vehicle: "Falcon 9 v1.1 Full Thrust",
-    launchpad: "SLC-40, Cape Canaveral, FL",
-    details: "SpaceX accomplished one of the most critical feats in reusable rocketry by returning the Falcon 9 Orbcomm-2 first stage back to earth for a ground landing at Landing Zone 1, verifying full booster reuse economics.",
-    coreSerial: "B1019 First Lander",
-    flightNum: 1,
-    reused: false,
-    landingType: "Landing Zone 1 Ground Touchdown"
-  },
-  {
-    id: "hist-crs8",
-    title: "CRS-8 First Drone Ship Sea landing",
-    date: "Apr 8, 2016",
-    dateUtc: "2016-04-08T18:33:00.000Z",
-    video_id: "lXgLyCYuYA4",
-    vehicle: "Falcon 9 v1.1 FT",
-    launchpad: "SLC-40, Cape Canaveral, FL",
-    details: "After multiple near-miss attempts, booster B1021 landed upright on the drone ship 'Of Course I Still Love You' during the CRS-8 mission, completing the first successful ocean recovery in history.",
-    coreSerial: "B1021",
-    flightNum: 1,
-    reused: false,
-    landingType: "OCISLY Ocean Recovery"
-  },
-  {
-    id: "hist-falcon1-flight4",
-    title: "Falcon 1 Flight 4 Maiden Success",
-    date: "Sep 28, 2008",
-    dateUtc: "2008-09-28T19:15:00.000Z",
-    video_id: "dLQ5xgWyX_k",
-    vehicle: "Falcon 1 Flight 4",
-    launchpad: "Omelek Island, Kwajalein Atoll",
-    details: "Facing complete corporate ruin, Elon Musk's small engineering crew successfully launched the fourth Falcon 1 vehicle into a stable orbit, creating the world's first liquid-propellant orbital rocket funded entirely by private enterprise.",
-    coreSerial: "Falcon 1 Merlins",
-    flightNum: 1,
-    reused: false,
-    landingType: "No Recovery Attempt (Expended)"
-  },
-  {
-    id: "hist-inspiration4",
-    title: "Inspiration4: All-Civilian Spaceflight",
-    date: "Sep 15, 2021",
-    dateUtc: "2021-09-15T22:02:00.000Z",
-    video_id: "3pvDF_o3sc0",
-    vehicle: "Falcon 9 Block 5 (Crew Dragon)",
-    launchpad: "LC-39A, Kennedy Space Center, FL",
-    details: "Inspiration4 flew four civilian crew members on a custom high-altitude orbital vacation without professional government pilots, raising hundreds of millions for pediatric cancer research and proving civilian space accessibility.",
-    coreSerial: "B1062",
-    flightNum: 3,
-    reused: true,
-    landingType: "Just Read the Instructions"
-  },
-  {
-    id: "hist-starship-flight4",
-    title: "Starship Flight 4 Ocean Splashdown",
-    date: "Jun 6, 2024",
-    dateUtc: "2024-06-06T12:50:00.000Z",
-    video_id: "0a_00nJ_Y88",
-    vehicle: "Starship & Super Heavy B11",
-    launchpad: "Starbase OLP-1, Boca Chica, TX",
-    details: "Starship completed its entire orbital test campaign, surviving severe atmospheric re-entry friction despite significant side flap erosion, and successfully executing a soft horizontal flip and vertical splashdown in the Indian Ocean.",
-    coreSerial: "B11 Booster & S29 Ship",
-    flightNum: 1,
-    reused: false,
-    landingType: "Indian Ocean soft sea-contact"
-  }
-];
-
-function missionLandingSummary(mission: any) {
-  if (!Array.isArray(mission.cores) || !mission.cores.length) return "Landing data pending";
-
-  const core = mission.cores[0];
-
-  if (core.land_success === true) {
-    return `SUCCESS • ${core.landing_type || "Landing"} • ${core.landing_pad || "Pad Unknown"}`;
-  }
-
-  if (core.land_success === false) {
-    return `FAILED • ${core.landing_type || "Landing"} • ${core.landing_pad || "Pad Unknown"}`;
-  }
-
-  return "Landing data pending";
-}
-
-// Local Fallback Data for Upcoming Launches in case of API speed latency or limits
-const FALLBACK_UPCOMING = [
-  {
-    id: "starship-flight-6",
-    name: "Starship Flight 6",
-    date_utc: "2026-06-18T21:00:00.000Z",
-    details: "Sixth test flight of the combined Starship and Super Heavy vehicle, targeting booster catch at Starbase and orbital stage ocean landing.",
-    rocket_name: "Starship",
-    launchpad_name: "Starbase OLP-1",
-    upcoming: true,
-    flight_number: 160,
-    links: {
-      patch: { large: "https://images.unsplash.com/photo-1541185933-ef5d8ed016c2?auto=format&fit=crop&q=80&w=400" },
-      webcast: "https://www.youtube.com/watch?v=l_g2s8mIWeQ"
-    }
-  },
-  {
-    id: "crew-10",
-    name: "Crew-10 (USCV-10)",
-    date_utc: "2026-07-31T09:12:00.000Z",
-    details: "SpaceX Crew-10 mission is scheduled to launch four crew members to the Area Orbit aboard a Crew Dragon spacecraft.",
-    rocket_name: "Falcon 9 Block 5",
-    launchpad_name: "LC-39A, Kennedy Space Center",
-    upcoming: true,
-    flight_number: 161,
-    links: {
-      patch: { large: "https://images.unsplash.com/photo-1516849841032-87cbac4d88f7?auto=format&fit=crop&q=80&w=400" },
-      webcast: "https://www.youtube.com/watch?v=OnoNITE-CLg"
-    }
-  },
-  {
-    id: "starlink-12-1",
-    name: "Starlink Group 12-1",
-    date_utc: "2026-05-30T14:45:00.000Z",
-    details: "SpaceX Falcon 9 will launch a batch of Starlink v2-mini satellites into low Earth orbit to expand internet coverage.",
-    rocket_name: "Falcon 9 Block 5",
-    launchpad_name: "SLC-40, Cape Canaveral",
-    upcoming: true,
-    flight_number: 162,
-    links: {
-      patch: { large: "https://images.unsplash.com/photo-1517976487492-5750f3195933?auto=format&fit=crop&q=80&w=400" },
-      webcast: "https://www.youtube.com/watch?v=F3G8Dclg8eI"
-    }
-  }
-];
-
-// Local Fallback Data for aerospace blogs
-const FALLBACK_NEWS = [
-  {
-    id: 1,
-    title: "SpaceX Super Heavy Catch on Second Attempt Redefines Flight Reuse",
-    news_site: "NASA Spaceflight",
-    published_at: "2026-05-15T12:00:00.000Z",
-    summary: "SpaceX has successfully caught the Super Heavy booster back at the launch tower during Flight 5, marking a monumental milestone in rocket reuse and fast-cycle flights.",
-    url: "https://www.spacex.com/"
-  },
-  {
-    id: 2,
-    title: "Falcon Heavy Launches GOES-U Next-Gen Weather Satellite",
-    news_site: "Spaceflight Now",
-    published_at: "2026-05-12T18:30:00.000Z",
-    summary: "A SpaceX Falcon Heavy successfully placed NOAA's advanced weather satellite into geostationary transfer orbit with dual booster recovery at Kennedy Space Center.",
-    url: "https://www.spacex.com/"
-  },
-  {
-    id: 3,
-    title: "Starlink Surpasses 8 Million Subscribers Globally, Falcon 9 Fleet Expands",
-    news_site: "Teslarati",
-    published_at: "2026-05-09T09:15:00.000Z",
-    summary: "With weekly Falcon launches, SpaceX’s satellite internet constellation Starlink now connects over eight million active users across more than 85 countries.",
-    url: "https://www.spacex.com/"
-  },
-  {
-    id: 4,
-    title: "Starship Flight 6 Operational Targets Approved by FAA for Summer Launch",
-    news_site: "Aerospace America",
-    published_at: "2026-05-08T14:20:00.000Z",
-    summary: "Federal regulators have cleared flight envelopes for Flight 6, approving operational plans for dual ship-tower recoveries and higher orbital thermal test loads.",
-    url: "https://www.spacex.com/"
-  },
-  {
-    id: 5,
-    title: "Crew-10 Dragon Spacecraft Prepares for Long-Duration Orbital Run",
-    news_site: "Space News",
-    published_at: "2026-05-06T11:45:00.000Z",
-    summary: "Engineers have concluded vacuum chamber leak checks on the Dragon capsule assigned to USCV-10, readying the spacecraft for cargo staging at LC-39A.",
-    url: "https://www.spacex.com/"
-  },
-  {
-    id: 6,
-    title: "SpaceX Secures Landmark Deep Space Launch Contract for Uranus Probe",
-    news_site: "NASA Mission Reports",
-    published_at: "2026-05-04T16:10:00.000Z",
-    summary: "A triple-core Falcon Heavy configuration will launch NASA's priority planetary probe on an outer solar system gravity-assist trajectory scheduled in late 2026.",
-    url: "https://www.spacex.com/"
-  },
-  {
-    id: 7,
-    title: "Next-Gen Raptor 3 Engine Achieves Record Combustion Chamber Pressure",
-    news_site: "TechCrunch Science",
-    published_at: "2026-05-02T08:30:00.000Z",
-    summary: "SpaceX's simplified build Raptor 3 rocket engine has logged over 350 bar peak chamber pressure on the McGregor test stand while improving thrust performance.",
-    url: "https://www.spacex.com/"
-  },
-  {
-    id: 8,
-    title: "Reusable Fairings Set New Turnaround Record of 21 Days for Starlink Flights",
-    news_site: "Booster Analytics",
-    published_at: "2026-04-30T10:05:00.000Z",
-    summary: "Fast cycle cleaning and structural inspections on recovery vessel Bob have enabled fairing halves to fly twice within one month, saving millions in manufacturing.",
-    url: "https://www.spacex.com/"
-  },
-  {
-    id: 9,
-    title: "Robotic Arm Mechazilla Upgrade Slated to Accelerate Launch Operations",
-    news_site: "Spaceflight Now",
-    published_at: "2026-04-28T15:00:00.000Z",
-    summary: "Installation of shock dampening cylinders and wider hinge bearings at Starbase OLP-1 will reduce turnaround time between Starship orbital stacking operations.",
-    url: "https://www.spacex.com/"
-  }
-];
 
 export default function App() {
+  const [view, setView] = useState<'dashboard' | 'pro'>('dashboard');
   const [lowerTab, setLowerTab] = useState<'news' | 'giveaway' | 'premium'>('news');
   const [filterVehicle, setFilterVehicle] = useState<string>("all");
   const [filterSuccess, setFilterSuccess] = useState<string>("all");
@@ -979,6 +54,17 @@ export default function App() {
   const [currentWinner, setCurrentWinner] = useState<string>("To Be Announced");
 
   const [activeVideoId, setActiveVideoId] = useState<string>("");
+  const [activeLowerReplay, setActiveLowerReplay] = useState<any | null>({
+    id: "l_g2s8mIWeQ",
+    video_id: "l_g2s8mIWeQ",
+    title: "Starship Flight 6",
+    type: "upcoming",
+    vehicle: "Starship",
+    booster: "Super Heavy Booster",
+    pad: "Starbase OLP-1",
+    details: "Sixth test flight of the combined Starship and Super Heavy vehicle, targeting booster catch at Starbase and orbital stage ocean landing.",
+    launchpad: "Starbase OLP-1"
+  });
   
   // Auth & Drive State
   const [needsAuth, setNeedsAuth] = useState(true);
@@ -1658,11 +744,30 @@ export default function App() {
     };
   }, [selectedLaunch]);
 
-  // Synchronize active video when a launch changes
+  // Synchronize active video and lower replay panel when selectedLaunch changes
   useEffect(() => {
     if (selectedLaunch) {
       const ytId = extractYoutubeId(youtubeUrl(selectedLaunch));
       setActiveVideoId(ytId);
+
+      // If the selected launch is a dynamic landing replay, do not overwrite the customized landing timeline panel
+      const isLanding = LANDING_VIDEOS.some(v => v.id === selectedLaunch.id);
+      if (isLanding) {
+        return;
+      }
+
+      // Automatically sync the main "MISSION DISPLAY" to show the selected launch details & webcast
+      setActiveLowerReplay({
+        id: ytId,
+        video_id: ytId,
+        title: selectedLaunch.name,
+        type: selectedLaunch.upcoming ? 'upcoming' : 'historic',
+        vehicle: selectedLaunch.rocket_name || selectedLaunch.rocket?.name || "Falcon 9",
+        booster: selectedLaunch.cores?.[0]?.core?.serial || selectedLaunch.cores?.[0]?.core || "N/A",
+        pad: selectedLaunch.launchpad_name || selectedLaunch.pad_locality || selectedLaunch.pad || "Cape Canaveral, FL",
+        details: selectedLaunch.details || "Launch operations and telemetry parameters.",
+        launchpad: selectedLaunch.launchpad_name || selectedLaunch.pad_locality || selectedLaunch.pad || "Cape Canaveral, FL"
+      });
     }
   }, [selectedLaunch]);
 
@@ -1680,6 +785,7 @@ export default function App() {
         webcast: `https://www.youtube.com/watch?v=${video.id}`
       }
     });
+    setActiveLowerReplay({ ...video, type: 'landing' });
     addLog(`Loading landing replay webcast: ${video.title}`);
   };
 
@@ -1703,6 +809,12 @@ export default function App() {
   const filteredUpcoming = useMemo(() => {
     return upcomingLaunchesList;
   }, [upcomingLaunchesList]);
+
+  const isCloseToLaunch = useMemo(() => {
+    if (timeLeft.isPast || timeLeft.isTbd) return false;
+    const totalMinutesLeft = timeLeft.days * 24 * 60 + timeLeft.hours * 60 + timeLeft.minutes;
+    return totalMinutesLeft < 5;
+  }, [timeLeft]);
 
   // Form Submission
   const handleGiveawaySubmit = (e: React.FormEvent) => {
@@ -1742,6 +854,10 @@ export default function App() {
 
   const patch = selectedLaunch ? patchImage(selectedLaunch) : "";
 
+  if (view === 'pro') {
+    return <TrackerProPage onBack={() => setView('dashboard')} />;
+  }
+
   return (
     <div className="min-h-screen relative font-inter">
       <div className="page-bg" aria-hidden="true"></div>
@@ -1758,6 +874,68 @@ export default function App() {
               referrerPolicy="no-referrer"
             />
           </div>
+
+          {/* Countdown Clock moved below the main logo in the header */}
+          <div className="relative z-10 w-full flex flex-col items-center mt-1.5 mb-1 px-4 max-w-[500px]">
+            <div className="text-sky-400 font-bold tracking-[0.2em] text-[10px] sm:text-xs uppercase mb-0.5 font-space text-center select-none font-semibold">
+              {countdownText === "MISSION ARCHIVE" ? "MISSION ARCHIVE" : "TIME UNTIL LAUNCH"}
+            </div>
+            
+            <div id="countdown" className="flex items-center gap-1.5 sm:gap-2 justify-center select-none font-mono tracking-tight text-3xl sm:text-4xl text-sky-400 font-semibold leading-none">
+              <div className="flex flex-col items-center w-11 sm:w-12">
+                <span className="text-sky-400 font-bold leading-none select-none inline-block transform scale-y-[1.15] origin-center">
+                  {timeLeft.isTbd || timeLeft.isPast ? "00" : timeLeft.days.toString().padStart(2, '0')}
+                </span>
+                <span className="text-[7.5px] sm:text-[8.5px] text-white font-bold tracking-[0.14em] sm:tracking-[0.16em] uppercase mt-0.5 font-space text-center leading-none">
+                  DAYS
+                </span>
+              </div>
+              
+              <span className="text-sky-400/90 leading-none -translate-y-1 select-none inline-block transform scale-y-[1.15]">
+                :
+              </span>
+
+              <div className="flex flex-col items-center w-11 sm:w-12">
+                <span className="text-sky-400 font-bold leading-none select-none inline-block transform scale-y-[1.15] origin-center">
+                  {timeLeft.isTbd || timeLeft.isPast ? "00" : timeLeft.hours.toString().padStart(2, '0')}
+                </span>
+                <span className="text-[7.5px] sm:text-[8.5px] text-white font-bold tracking-[0.14em] sm:tracking-[0.16em] uppercase mt-0.5 font-space text-center leading-none">
+                  HOURS
+                </span>
+              </div>
+              
+              <span className="text-sky-400/90 leading-none -translate-y-1 select-none inline-block transform scale-y-[1.15]">
+                :
+              </span>
+
+              <div className="flex flex-col items-center w-11 sm:w-12">
+                <span className="text-sky-400 font-bold leading-none select-none inline-block transform scale-y-[1.15] origin-center">
+                  {timeLeft.isTbd || timeLeft.isPast ? "00" : timeLeft.minutes.toString().padStart(2, '0')}
+                </span>
+                <span className="text-[7.5px] sm:text-[8.5px] text-white font-bold tracking-[0.14em] sm:tracking-[0.16em] uppercase mt-0.5 font-space text-center leading-none">
+                  MINUTES
+                </span>
+              </div>
+
+              <span className="text-sky-400/90 leading-none -translate-y-1 select-none inline-block transform scale-y-[1.15]">
+                :
+              </span>
+
+              <div className="flex flex-col items-center w-11 sm:w-12">
+                <span className="text-sky-400 font-bold leading-none select-none inline-block transform scale-y-[1.15] origin-center">
+                  {timeLeft.isTbd || timeLeft.isPast ? "00" : timeLeft.seconds.toString().padStart(2, '0')}
+                </span>
+                <span className="text-[7.5px] sm:text-[8.5px] text-white font-bold tracking-[0.14em] sm:tracking-[0.16em] uppercase mt-0.5 font-space text-center leading-none">
+                  SECONDS
+                </span>
+              </div>
+            </div>
+
+            <div id="nextName" className="mt-1 px-2 text-[10px] md:text-[11px] tracking-[0.15em] text-[#ff7a18] text-center font-bold font-space uppercase break-words max-w-full">
+              {selectedLaunch ? selectedLaunch.name : "Syncing Mission State"}
+            </div>
+          </div>
+
           <div className="title-block" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
             <div className="header-brand-inline">
               <div className="header-seo-tagline">
@@ -1765,373 +943,8 @@ export default function App() {
               </div>
               {/* Removed console-footer-text per user request */}
             </div>
-            <div className="flex flex-col items-end ml-4">
-              {/* Removed Watch Live Feed from header, moved to countdown panel */}
-            </div>
           </div>
         </header>
-
-        {/* Navigation Tabs (File Cabinet Style) */}
-        <div className="flex gap-2 sm:gap-4 mt-6 mb-[-16px] relative z-20 w-full" style={{ borderBottom: '1px solid rgba(0, 231, 255, 0.15)' }}>
-          <button 
-            onClick={() => {
-              setLowerTab('news');
-              setTimeout(() => document.getElementById('lower-features-area')?.scrollIntoView({ behavior: 'smooth' }), 100);
-            }} 
-            className={`flex-1 flex items-center justify-center py-2 rounded-t-lg font-space text-[10px] sm:text-xs uppercase tracking-widest font-bold border-t border-l border-r transition-all ${
-              lowerTab === 'news' 
-                ? 'bg-[#0b101a] border-[#00e7ff]/30 text-[#00e7ff]' 
-                : 'bg-[#121826] border-white/5 text-slate-400 hover:text-white/90 hover:bg-[#1a2235]'
-            }`}
-            style={{ marginBottom: '-1px' }}
-          >
-            Intelligence Feed
-          </button>
-          <button 
-            onClick={() => {
-              setLowerTab('giveaway');
-              setTimeout(() => document.getElementById('lower-features-area')?.scrollIntoView({ behavior: 'smooth' }), 100);
-            }} 
-            className={`flex-1 flex items-center justify-center py-2 rounded-t-lg font-space text-[10px] sm:text-xs uppercase tracking-widest font-bold border-t border-l border-r transition-all ${
-              lowerTab === 'giveaway' 
-                ? 'bg-[#0b101a] border-[#00e7ff]/30 text-[#00e7ff]' 
-                : 'bg-[#121826] border-white/5 text-slate-400 hover:text-white/90 hover:bg-[#1a2235]'
-            }`}
-            style={{ marginBottom: '-1px' }}
-          >
-            Giveaways
-          </button>
-          <button 
-            onClick={() => {
-              setLowerTab('premium');
-              setTimeout(() => document.getElementById('lower-features-area')?.scrollIntoView({ behavior: 'smooth' }), 100);
-            }} 
-            className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-t-lg font-space text-[10px] sm:text-xs uppercase tracking-widest font-bold border-t border-l border-r transition-all ${
-              lowerTab === 'premium' 
-                ? 'bg-[#0b101a] border-[#ff6b2b]/40 text-[#ff6b2b]' 
-                : 'bg-[#121826] border-white/5 text-slate-400 hover:text-[#ff6b2b] hover:bg-[#1a2235]'
-            }`}
-            style={{ marginBottom: '-1px' }}
-          >
-            <Lock size={12} />
-            <span className="truncate">Tracker Pro</span>
-          </button>
-        </div>
-
-        {/* Global Live Parameters Countdown Section */}
-        <section className="panel countdown-panel mt-4 relative lg:static">
-          <div className="scroll-panel-wrapper">
-            <div className="telemetry-left-empty">
-              <section className="dynamic-landings-header-module">
-              <div className="dynamic-landings-inline-title">
-                Dynamic Landings
-                <span className="badge animate-pulse" style={{ display: "inline-block", fontSize: "9px", padding: "1px 4px", float: "right" }}>REPLAYS</span>
-              </div>
-              
-              {/* Landing filters */}
-              <div className="flex gap-1 items-center justify-between px-1 py-1 border-b border-white/5 bg-slate-950/40 mb-1 rounded-sm select-none">
-                <select 
-                  value={filterVehicle} 
-                  onChange={(e) => setFilterVehicle(e.target.value)} 
-                  className="py-1 px-1 bg-[#0a0f1d] border border-slate-800 rounded font-sans text-[9px] text-[#8fe9ff] focus:border-cyan-400 focus:ring-0 outline-none w-[48%]"
-                  style={{ padding: "2px 4px" }}
-                >
-                  <option value="all">Vehicle: All</option>
-                  <option value="Falcon 9">Falcon 9</option>
-                  <option value="Falcon Heavy">Falcon Heavy</option>
-                  <option value="Starship">Starship</option>
-                </select>
-                <select 
-                  value={filterSuccess} 
-                  onChange={(e) => setFilterSuccess(e.target.value)} 
-                  className="py-1 px-1 bg-[#0a0f1d] border border-slate-800 rounded font-sans text-[9px] text-[#ff7a18] focus:border-amber-400 focus:ring-0 outline-none w-[48%]"
-                  style={{ padding: "2px 4px" }}
-                >
-                  <option value="all">Status: All</option>
-                  <option value="success">Landed</option>
-                  <option value="fail">Off-nominal</option>
-                </select>
-              </div>
-
-              <div className="dynamic-landings-header-feed">
-                {/* Spotlight Card */}
-                {filterVehicle === "all" && filterSuccess === "all" && (
-                  <div 
-                    className="p-1 px-1.5 mb-1.5 border border-amber-500/20 bg-amber-500/5 rounded text-left relative overflow-hidden flex-shrink-0"
-                    style={{ background: "linear-gradient(135deg, rgba(245,158,11,0.06), rgba(0,0,0,0.3))" }}
-                  >
-                    <span className="text-[7.5px] text-amber-400 font-mono tracking-widest font-bold uppercase block mb-0.5 animate-pulse">⭐ FEATURED REPLAY</span>
-                    <button 
-                      onClick={() => playLandingVideo(LANDING_VIDEOS[0])}
-                      style={{ background: 'none', border: 'none', padding: 0, margin: 0, textAlign: 'left', cursor: 'pointer', outline: 'none' }}
-                      className="w-full"
-                    >
-                      <strong className="text-[10px] text-amber-200 block truncate hover:text-cyan-400 transition-colors">
-                        {LANDING_VIDEOS[0].title}
-                      </strong>
-                      <span className="text-[7.5px] text-slate-400 block mt-0.5 uppercase">
-                        {LANDING_VIDEOS[0].landingType} • {LANDING_VIDEOS[0].booster}
-                      </span>
-                    </button>
-                  </div>
-                )}
-
-                {LANDING_VIDEOS.filter(v => {
-                  if (filterVehicle !== "all" && v.vehicle !== filterVehicle) return false;
-                  if (filterSuccess !== "all") {
-                    const wantsSuccess = filterSuccess === "success";
-                    if (v.success !== wantsSuccess) return false;
-                  }
-                  return true;
-                }).map((video) => (
-                  <div
-                    key={video.id}
-                    className={`dynamic-landings-header-card ${activeVideoId === video.id ? 'active' : ''}`}
-                    style={{
-                      width: "100%",
-                      textAlign: "left",
-                      border: activeVideoId === video.id ? "1px solid var(--cyan)" : "1px solid rgba(0, 231, 255, 0.10)",
-                      background: activeVideoId === video.id ? "rgba(0, 231, 255, 0.08)" : "rgba(0, 0, 0, 0.22)",
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      margin: "0 0 3px 0",
-                      padding: "4px 6px"
-                    }}
-                  >
-                    <button 
-                      onClick={() => playLandingVideo(video)} 
-                      style={{ background: 'none', border: 'none', padding: 0, margin: 0, textAlign: 'left', flex: 1, overflow: 'hidden', cursor: 'pointer', outline: 'none' }}
-                    >
-                      <div className="flex justify-between items-center mr-1">
-                        <span style={{ fontSize: "8px", color: "var(--cyan)", textTransform: "uppercase" }}>{video.type}</span>
-                        <span className={`text-[7px] px-1 font-mono uppercase rounded-[2px] ${video.success ? 'text-emerald-400 bg-emerald-500/10' : 'text-amber-400 bg-amber-500/10'}`}>
-                          {video.success ? "Landed" : "Off-Nom"}
-                        </span>
-                      </div>
-                      <strong style={{ fontSize: "10px", color: "#eef8ff", display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{video.title}</strong>
-                    </button>
-                    <a 
-                      href={`https://www.youtube.com/watch?v=${video.id}`} 
-                      target="_blank" 
-                      rel="noopener noreferrer"
-                      style={{ flexShrink: 0, padding: "4px", color: "var(--muted)" }}
-                      title="Open YouTube Media Link in new tab"
-                    >
-                       <Tv size={12} className="hover:text-cyan-400 transition-colors" />
-                    </a>
-                  </div>
-                ))}
-              </div>
-            </section>
-          </div>
-          </div>
-
-          <div className="countdown-core overflow-hidden relative border-l-0 border-r-0 sm:border-l sm:border-r border-slate-800/60 p-1 flex flex-col justify-center items-center py-2 min-h-[160px]">
-            {patch && (
-              <div 
-                className="absolute inset-0 pointer-events-none z-0" 
-                style={{
-                  backgroundImage: `url(${patch})`,
-                  backgroundPosition: 'top center',
-                  backgroundSize: '150%',
-                  backgroundRepeat: 'no-repeat',
-                  opacity: 0.3,
-                  filter: 'grayscale(50%)'
-                }} 
-              />
-            )}
-            <div className="relative z-10 w-full flex flex-col items-center">
-              <div className="text-sky-400 font-bold tracking-[0.2em] text-[10px] sm:text-xs uppercase mb-1 font-space text-center select-none font-semibold">
-                {countdownText === "MISSION ARCHIVE" ? "MISSION ARCHIVE" : "TIME UNTIL LAUNCH"}
-              </div>
-              
-              <div id="countdown" className="flex items-center gap-1 sm:gap-1.5 md:gap-2 justify-center select-none font-mono tracking-tight text-4xl sm:text-5xl md:text-[54px] lg:text-[62px] text-sky-400 font-semibold leading-none">
-                <div className="flex flex-col items-center w-12 sm:w-14 md:w-[62px]">
-                  <span className="text-sky-400 font-bold leading-none select-none inline-block transform scale-y-[1.18] origin-center">
-                    {timeLeft.isTbd || timeLeft.isPast ? "00" : timeLeft.days.toString().padStart(2, '0')}
-                  </span>
-                  <span className="text-[9px] sm:text-[10px] text-white font-bold tracking-[0.14em] sm:tracking-[0.16em] uppercase mt-1.5 font-space text-center leading-none">
-                    DAYS
-                  </span>
-                </div>
-                
-                <span className="text-sky-400/90 leading-none -translate-y-2 select-none inline-block transform scale-y-[1.18]">
-                  :
-                </span>
-
-                <div className="flex flex-col items-center w-12 sm:w-14 md:w-[62px]">
-                  <span className="text-sky-400 font-bold leading-none select-none inline-block transform scale-y-[1.18] origin-center">
-                    {timeLeft.isTbd || timeLeft.isPast ? "00" : timeLeft.hours.toString().padStart(2, '0')}
-                  </span>
-                  <span className="text-[9px] sm:text-[10px] text-white font-bold tracking-[0.14em] sm:tracking-[0.16em] uppercase mt-1.5 font-space text-center leading-none">
-                    HOURS
-                  </span>
-                </div>
-                
-                <span className="text-sky-400/90 leading-none -translate-y-2 select-none inline-block transform scale-y-[1.18]">
-                  :
-                </span>
-
-                <div className="flex flex-col items-center w-12 sm:w-14 md:w-[62px]">
-                  <span className="text-sky-400 font-bold leading-none select-none inline-block transform scale-y-[1.18] origin-center">
-                    {timeLeft.isTbd || timeLeft.isPast ? "00" : timeLeft.minutes.toString().padStart(2, '0')}
-                  </span>
-                  <span className="text-[9px] sm:text-[10px] text-white font-bold tracking-[0.14em] sm:tracking-[0.16em] uppercase mt-1.5 font-space text-center leading-none">
-                    MINUTES
-                  </span>
-                </div>
-
-                <span className="text-sky-400/90 leading-none -translate-y-2 select-none inline-block transform scale-y-[1.18]">
-                  :
-                </span>
-
-                <div className="flex flex-col items-center w-12 sm:w-14 md:w-[62px]">
-                  <span className="text-sky-400 font-bold leading-none select-none inline-block transform scale-y-[1.18] origin-center">
-                    {timeLeft.isTbd || timeLeft.isPast ? "00" : timeLeft.seconds.toString().padStart(2, '0')}
-                  </span>
-                  <span className="text-[9px] sm:text-[10px] text-white font-bold tracking-[0.14em] sm:tracking-[0.16em] uppercase mt-1.5 font-space text-center leading-none">
-                    SECONDS
-                  </span>
-                </div>
-              </div>
-
-              <div id="nextName" className="mt-2 px-2 text-[11px] md:text-xs tracking-[0.15em] text-[#ff7a18] text-center font-bold font-space uppercase break-words max-w-full">
-                {selectedLaunch ? selectedLaunch.name : "Syncing Mission State"}
-              </div>
-
-              {/* WATCH LIVE FEED BUTTON MOVED TO DECOUPLED POSITION IN COUNTDOWN */}
-              <div className="mt-3.5 pb-1 z-20">
-                {(() => {
-                  const isNearLaunch = upcomingLaunchesList[0]?.date_utc && (new Date(upcomingLaunchesList[0].date_utc).getTime() - Date.now() > 0) && (new Date(upcomingLaunchesList[0].date_utc).getTime() - Date.now() <= 5 * 60 * 1000);
-                  const isHistoric = selectedLaunch && !selectedLaunch.upcoming;
-                  const rawLink = isHistoric 
-                    ? (youtubeUrl(selectedLaunch) || selectedLaunch?.links?.webcast || "") 
-                    : upcomingWebcastUrl;
-                  const buttonLink = rawLink || "https://www.youtube.com/@SpaceX/streams";
-
-                  return (
-                    <a
-                      href={buttonLink}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      onClick={() => {
-                        const targetLaunch = (selectedLaunch && selectedLaunch.upcoming) ? selectedLaunch : launches.find(l => l.upcoming);
-                        if (targetLaunch && !isHistoric) {
-                          setSelectedLaunch(targetLaunch);
-                          addLog(`Selected upcoming mission: ${targetLaunch.name} for live feed`);
-                        }
-                        
-                        // Extract video ID and present it in-app natively
-                        const ytId = extractYoutubeId(buttonLink);
-                        if (ytId) {
-                          setActiveVideoId(ytId);
-                          addLog(`Natively presenting video element for: ${selectedLaunch?.name || "SpaceX webcast"}`);
-                          setTimeout(() => {
-                            document.getElementById('displayArea')?.scrollIntoView({ behavior: 'smooth' });
-                          }, 100);
-                        }
-                      }}
-                      className={`px-5 py-2 rounded-lg font-space text-xs tracking-widest font-bold flex items-center justify-center gap-2 transition-all shrink-0 ${
-                        isNearLaunch && !isHistoric
-                          ? 'bg-red-600 hover:bg-red-700 text-white shadow-[0_0_15px_rgba(239,68,68,0.4)] border border-red-500/50 animate-pulse' 
-                          : 'bg-cyan-900/40 text-cyan-400 border border-cyan-500/30 hover:bg-cyan-850 hover:text-cyan-300 shadow-[0_0_10px_rgba(0,231,255,0.15)]'
-                      }`}
-                    >
-                      <Tv className="w-4 h-4" />
-                      <span>{isHistoric ? "WATCH REPLAY DECK" : "WATCH LIVE FEED"}</span>
-                    </a>
-                  );
-                })()}
-
-                {/* Rockets Image Display with optimized scale to ensure prominent visibility and elegant panel alignment */}
-                <div className="flex justify-center mt-3 sm:mt-4 z-20 mx-auto pointer-events-none fade-in">
-                  <img 
-                    src="/rockets.png" 
-                    alt="SpaceX Vehicles Structure" 
-                    className="w-full max-w-[150px] max-h-[110px] md:max-h-[130px] object-contain drop-shadow-[0_0_20px_rgba(255,255,255,0.18)] filter grayscale-[10%]" 
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="scroll-panel-wrapper">
-            <div className="telemetry-left-empty">
-              <section className="dynamic-landings-header-module">
-              <div className="dynamic-landings-inline-title">
-                SpaceX Historic Events
-                <span className="badge animate-pulse" style={{ display: "inline-block", fontSize: "9px", padding: "1px 4px", float: "right" }}>VIDEO ARCHIVE</span>
-              </div>
-              <div className="dynamic-landings-header-feed">
-                {SPACEX_HISTORIC_EVENTS.map((event) => {
-                  const isActive = selectedLaunch?.id === event.id;
-                  return (
-                    <div
-                      key={event.id}
-                      className={`dynamic-landings-header-card ${isActive ? 'active' : ''}`}
-                      style={{
-                        width: "100%",
-                        textAlign: "left",
-                        border: isActive ? "1px solid var(--cyan)" : "1px solid rgba(0, 231, 255, 0.10)",
-                        background: isActive ? "rgba(0, 231, 255, 0.08)" : "rgba(0, 0, 0, 0.22)",
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        margin: "0 0 3px 0",
-                        padding: "4px 6px"
-                      }}
-                    >
-                      <button 
-                        onClick={() => {
-                          const customLaunch = {
-                            id: event.id,
-                            name: event.title,
-                            upcoming: false,
-                            date_utc: event.dateUtc || null,
-                            details: event.details,
-                            rocket_name: event.vehicle,
-                            launchpad_name: event.launchpad,
-                            links: {
-                              webcast: `https://www.youtube.com/watch?v=${event.video_id}`
-                            },
-                            cores: [
-                              {
-                                core: { serial: event.coreSerial || "Historic Core" },
-                                flight: event.flightNum || 1,
-                                reused: event.reused || false,
-                                landing_attempt: true,
-                                landing_success: true,
-                                landing_type: event.landingType || "LZ Landing",
-                              }
-                            ]
-                          };
-                          setSelectedLaunch(customLaunch);
-                          setActiveVideoId(event.video_id);
-                          addLog(`Loading historic flight archive webcast: ${event.title}`);
-                        }}
-                        style={{ background: 'none', border: 'none', padding: 0, margin: 0, textAlign: 'left', flex: 1, overflow: 'hidden', cursor: 'pointer', outline: 'none' }}
-                      >
-                        <span style={{ fontSize: "8px", color: "var(--cyan)", textTransform: "uppercase" }}>{event.date}</span>
-                        <strong style={{ fontSize: "10px", color: isActive ? "var(--cyan)" : "#eef8ff", display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{event.title}</strong>
-                      </button>
-                      <a 
-                        href={`https://www.youtube.com/watch?v=${event.video_id}`} 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        style={{ flexShrink: 0, padding: "4px", color: "var(--muted)" }}
-                        title="Open YouTube Media Link in new tab"
-                      >
-                         <Tv size={12} className="hover:text-cyan-400 transition-colors" />
-                      </a>
-                    </div>
-                  );
-                })}
-              </div>
-            </section>
-          </div>
-          </div>
-        </section>
 
         {/* Master Triple Column Dashboard Grid */}
         <section className="mission-grid">
@@ -2151,7 +964,23 @@ export default function App() {
                 <small>Selected Launch</small>
                 <h2 style={{ fontSize: '1.25rem' }}>Mission Display</h2>
               </div>
-              <span className="badge">LIVE PANEL</span>
+              <div className="flex flex-col items-end gap-1.5 select-none">
+                <span className="badge">LIVE PANEL</span>
+                <a
+                  href={upcomingWebcastUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={`badge cursor-pointer text-center select-none uppercase transition-all duration-300 font-mono tracking-widest ${
+                    isCloseToLaunch 
+                      ? '!bg-red-600 !border-red-500 !text-white animate-pulse shadow-[0_0_12px_rgba(239,68,68,0.7)]' 
+                      : 'hover:bg-cyan-500/20 hover:border-cyan-400'
+                  }`}
+                  style={{ display: 'inline-block', fontSize: '10px', padding: '3px 8px', minWidth: '82px' }}
+                  title={isCloseToLaunch ? "Launch imminent! Watch Live broadcast." : "Watch webcast coverage"}
+                >
+                  WATCH LIVE
+                </a>
+              </div>
             </div>
 
             {selectedLaunch ? (
@@ -2549,317 +1378,372 @@ export default function App() {
 
         </section>
 
+        {/* Navigation Tabs (File Cabinet Style) */}
+        <div className="flex gap-2 sm:gap-4 mt-6 mb-[-16px] relative z-20 w-full" style={{ borderBottom: '1px solid rgba(0, 231, 255, 0.15)' }}>
+          <button 
+            onClick={() => {
+              setLowerTab('news');
+              setTimeout(() => document.getElementById('lower-features-area')?.scrollIntoView({ behavior: 'smooth' }), 100);
+            }} 
+            className={`flex-1 flex items-center justify-center py-2 rounded-t-lg font-space text-[10px] sm:text-xs uppercase tracking-widest font-bold border-t border-l border-r transition-all ${
+              lowerTab === 'news' 
+                ? 'bg-[#0b101a] border-[#00e7ff]/30 text-[#00e7ff]' 
+                : 'bg-[#121826] border-white/5 text-slate-400 hover:text-white/90 hover:bg-[#1a2235]'
+            }`}
+            style={{ marginBottom: '-1px' }}
+          >
+            Intelligence Feed
+          </button>
+          <button 
+            onClick={() => {
+              setLowerTab('giveaway');
+              setTimeout(() => document.getElementById('lower-features-area')?.scrollIntoView({ behavior: 'smooth' }), 100);
+            }} 
+            className={`flex-1 flex items-center justify-center py-2 rounded-t-lg font-space text-[10px] sm:text-xs uppercase tracking-widest font-bold border-t border-l border-r transition-all ${
+              lowerTab === 'giveaway' 
+                ? 'bg-[#0b101a] border-[#00e7ff]/30 text-[#00e7ff]' 
+                : 'bg-[#121826] border-white/5 text-slate-400 hover:text-white/90 hover:bg-[#1a2235]'
+            }`}
+            style={{ marginBottom: '-1px' }}
+          >
+            Giveaways
+          </button>
+          <button 
+            onClick={() => {
+              setView('pro');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }} 
+            className="flex-1 flex items-center justify-center gap-2 py-2 rounded-t-lg font-space text-[10px] sm:text-xs uppercase tracking-widest font-bold border-t border-l border-r transition-all bg-[#121826] border-white/5 text-slate-400 hover:text-[#ff6b2b] hover:bg-[#1a2235]"
+            style={{ marginBottom: '-1px' }}
+          >
+            <Lock size={12} />
+            <span className="truncate">Tracker Pro</span>
+          </button>
+        </div>
 
-
-
-
-        {/* Development News / Intelligence Briefings bento module */}
-        <div id="lower-features-area">
-        {lowerTab === 'news' && (
-          <div className="animate-in fade-in slide-in-from-bottom-2 duration-500">
-            <section className="mission-intel-news">
-              <div className="flex border-b border-cyan-500/18 pb-2 mt-[-5px] mb-4 gap-3 items-start justify-between">
-                <div>
-                  <h2 className="m-0 text-base tracking-[0.16em] uppercase text-white shadow-none" style={{ fontFamily: '"Space Grotesk", sans-serif', textShadow: '0 0 12px rgba(127, 220, 255, 0.5)' }}>Spaceflight News API Feed</h2>
-                  <p className="m-0 mt-1.5 text-[#88a7b8] text-[13px] leading-[1.45]" style={{ fontFamily: 'Inter, sans-serif' }}>Filtered for SpaceX, Starship, Falcon, Raptor, and Starlink mission intelligence.</p>
-                </div>
-                <a className="whitespace-nowrap px-[14px] py-[6px] shrink-0 border border-[rgba(0,231,255,0.3)] bg-transparent text-[#00e7ff] hover:bg-[rgba(0,231,255,0.1)] hover:text-[#fff] text-[11px] uppercase tracking-[0.15em] font-semibold transition-colors duration-200 uppercase inline-block rounded" href="https://www.spacex.com/updates/" target="_blank" rel="noopener noreferrer">SpaceX Updates ↗</a>
+        {/* Global Live Parameters Countdown Section */}
+        <section className="panel countdown-panel mt-4 relative lg:static">
+          <div className="scroll-panel-wrapper">
+            <div className="telemetry-left-empty">
+              <section className="dynamic-landings-header-module">
+              <div className="dynamic-landings-inline-title">
+                Dynamic Landings
+                <span className="badge animate-pulse" style={{ display: "inline-block", fontSize: "9px", padding: "1px 4px", float: "right" }}>REPLAYS</span>
               </div>
-              <div id="intelNewsGrid" className="news-intel-grid">
-                {news.slice(0, 9).map((article) => {
-                  const site = article.news_site || "NASA Spaceflight";
-                  const title = article.title || "Spaceflight Mission Highlight";
-                  const date = new Date(article.published_at || article.publishedAt || article.updated_at || article.published || Date.now()).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
-                  const infoRaw = article.summary || "Latest development notes on SpaceX Falcon booster recoveries and launchpad operations.";
-                  const info = infoRaw.length > 150 ? infoRaw.substring(0, 150) + "…" : infoRaw;
-                  const imageUrl = article.image_url || article.imageUrl;
+              
+              {/* Landing filters */}
+              <div className="flex gap-1 items-center justify-between px-1 py-1 border-b border-white/5 bg-slate-950/40 mb-1 rounded-sm select-none">
+                <select 
+                  value={filterVehicle} 
+                  onChange={(e) => setFilterVehicle(e.target.value)} 
+                  className="py-1 px-1 bg-[#0a0f1d] border border-slate-800 rounded font-sans text-[9px] text-[#8fe9ff] focus:border-cyan-400 focus:ring-0 outline-none w-[48%]"
+                  style={{ padding: "2px 4px" }}
+                >
+                  <option value="all">Vehicle: All</option>
+                  <option value="Falcon 9">Falcon 9</option>
+                  <option value="Falcon Heavy">Falcon Heavy</option>
+                  <option value="Starship">Starship</option>
+                </select>
+                <select 
+                  value={filterSuccess} 
+                  onChange={(e) => setFilterSuccess(e.target.value)} 
+                  className="py-1 px-1 bg-[#0a0f1d] border border-slate-800 rounded font-sans text-[9px] text-[#ff7a18] focus:border-amber-400 focus:ring-0 outline-none w-[48%]"
+                  style={{ padding: "2px 4px" }}
+                >
+                  <option value="all">Status: All</option>
+                  <option value="success">Landed</option>
+                  <option value="fail">Off-nominal</option>
+                </select>
+              </div>
+
+              <div className="dynamic-landings-header-feed">
+                {/* Spotlight Card */}
+                {filterVehicle === "all" && filterSuccess === "all" && (
+                  <div 
+                    className="p-1 px-1.5 mb-1.5 border border-amber-500/20 bg-amber-500/5 rounded text-left relative overflow-hidden flex-shrink-0"
+                    style={{ background: "linear-gradient(135deg, rgba(245,158,11,0.06), rgba(0,0,0,0.3))" }}
+                  >
+                    <span className="text-[7.5px] text-amber-400 font-mono tracking-widest font-bold uppercase block mb-0.5 animate-pulse">⭐ FEATURED REPLAY</span>
+                    <button 
+                      onClick={() => playLandingVideo(LANDING_VIDEOS[0])}
+                      style={{ background: 'none', border: 'none', padding: 0, margin: 0, textAlign: 'left', cursor: 'pointer', outline: 'none' }}
+                      className="w-full"
+                    >
+                      <strong className="text-[10px] text-amber-200 block truncate hover:text-cyan-400 transition-colors">
+                        {LANDING_VIDEOS[0].title}
+                      </strong>
+                      <span className="text-[7.5px] text-slate-400 block mt-0.5 uppercase">
+                        {LANDING_VIDEOS[0].landingType} • {LANDING_VIDEOS[0].booster}
+                      </span>
+                    </button>
+                  </div>
+                )}
+
+                {LANDING_VIDEOS.filter(v => {
+                  if (filterVehicle !== "all" && v.vehicle !== filterVehicle) return false;
+                  if (filterSuccess !== "all") {
+                    const wantsSuccess = filterSuccess === "success";
+                    if (v.success !== wantsSuccess) return false;
+                  }
+                  return true;
+                }).map((video) => {
+                  const isLandingActive = activeVideoId === video.id || activeLowerReplay?.id === video.id;
                   return (
-                    <div key={article.id} className="news-intel-card" style={{ padding: imageUrl ? "12px" : "16px" }}>
-                      {imageUrl && (
-                        <a href={article.url || "https://www.spacex.com/"} target="_blank" rel="noopener noreferrer" className="news-intel-card-image mb-3 block overflow-hidden rounded-lg border border-white/10 opacity-80 hover:opacity-100 transition-opacity">
-                          <img src={imageUrl} alt={title} className="w-full h-[140px] object-cover" loading="lazy" />
-                        </a>
-                      )}
-                      <div className="flex-1 flex flex-col justify-between" style={{ padding: imageUrl ? "0 4px" : "0" }}>
-                        <div>
-                          <h3>{title}</h3>
-                          <div className="news-meta">{site} • {date}</div>
-                          <p style={{ color: "var(--muted)", fontSize: "13px", lineHeight: "1.45" }}>{info}</p>
+                    <div
+                      key={video.id}
+                      className={`dynamic-landings-header-card ${isLandingActive ? 'active' : ''}`}
+                      style={{
+                        width: "100%",
+                        textAlign: "left",
+                        border: isLandingActive ? "1px solid var(--cyan)" : "1px solid rgba(0, 231, 255, 0.10)",
+                        background: isLandingActive ? "rgba(0, 231, 255, 0.08)" : "rgba(0, 0, 0, 0.22)",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        margin: "0 0 3px 0",
+                        padding: "4px 6px"
+                      }}
+                    >
+                      <button 
+                        onClick={() => playLandingVideo(video)} 
+                        style={{ background: 'none', border: 'none', padding: 0, margin: 0, textAlign: 'left', flex: 1, overflow: 'hidden', cursor: 'pointer', outline: 'none' }}
+                      >
+                        <div className="flex justify-between items-center mr-1">
+                          <span style={{ fontSize: "8px", color: "var(--cyan)", textTransform: "uppercase" }}>{video.type}</span>
+                          <span className={`text-[7px] px-1 font-mono uppercase rounded-[2px] ${video.success ? 'text-emerald-400 bg-emerald-500/10' : 'text-amber-400 bg-amber-500/10'}`}>
+                            {video.success ? "Landed" : "Off-Nom"}
+                          </span>
                         </div>
-                        <a href={article.url || "https://www.spacex.com/"} target="_blank" rel="noopener noreferrer" style={{ marginTop: imageUrl ? "12px" : "0" }}>
-                          Read Article
-                        </a>
-                      </div>
+                        <strong style={{ fontSize: "10px", color: "#eef8ff", display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{video.title}</strong>
+                      </button>
+                      <a 
+                        href={`https://www.youtube.com/watch?v=${video.id}`} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        style={{ flexShrink: 0, padding: "4px", color: "var(--muted)" }}
+                        title="Open YouTube Media Link in new tab"
+                      >
+                         <Tv size={12} className="hover:text-cyan-400 transition-colors" />
+                      </a>
                     </div>
                   );
                 })}
               </div>
             </section>
-
-            {/* Ad Placeholders for Future Monetization */}
-            <section className="ad-placeholders-section">
-              <div className="ad-placeholders-grid">
-                <div className="ad-cell">
-                  <span>Future Advertising Block</span>
-                </div>
-                <div className="ad-cell">
-                  <span>Future Advertising Block</span>
-                </div>
-                <div className="ad-cell">
-                  <span>Future Advertising Block</span>
-                </div>
-              </div>
-            </section>
           </div>
-        )}
+          </div>
 
-        {lowerTab === 'giveaway' && (
-          <div className="animate-in fade-in slide-in-from-bottom-2 duration-500">
-            {/* Falcon Heavy die-cast giveaway module */}
-            <section className="weekly-giveaway">
-              <div className="weekly-giveaway-title">
-                <div>
-                  <h2>Falcon Heavy Desktop Mockup Giveaway</h2>
-                  <p>Submit your transmission credentials to enter the queue for our monthly hand-crafted aerospace display drawing. Completely offline persistent state storage.</p>
-                </div>
-              </div>
-              <form id="giveawayForm" className="giveaway-form" onSubmit={handleGiveawaySubmit}>
-                <div>
-                  <label htmlFor="gwName">Transmission Name</label>
-                  <input 
-                    type="text" 
-                    id="gwName" 
-                    placeholder="Contestant Identifier" 
-                    required 
-                    value={giveawayName}
-                    onChange={(e) => setGiveawayName(e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label htmlFor="gwEmail">Datalink Address</label>
-                  <input 
-                    type="email" 
-                    id="gwEmail" 
-                    placeholder="you@domain.com" 
-                    required 
-                    value={giveawayEmail}
-                    onChange={(e) => setGiveawayEmail(e.target.value)}
-                  />
-                </div>
-                <button type="submit">Add Contestant</button>
-              </form>
+          <div className="countdown-core overflow-hidden relative border-l-0 border-r-0 sm:border-l sm:border-r border-slate-800/60 p-0 flex flex-col justify-start items-stretch min-h-[380px] h-auto">
+            {/* Lower Middle Panel Header */}
+            <div className="flex w-full items-center justify-between border-b border-white/5 px-3 py-2 bg-slate-950/40 shrink-0 select-none z-20">
+              <span className="text-[8px] font-mono font-bold tracking-widest text-[#ff7a18] uppercase">CORE COMMAND</span>
+              <span className="text-[8px] font-space font-bold tracking-widest uppercase text-cyan-400 bg-cyan-500/10 border border-cyan-500/20 px-2 py-0.5 rounded-[3px]">
+                MISSION DISPLAY
+              </span>
+            </div>
 
-              {/* Winner Draw Display box */}
-              <div className="last-winner-box">
-                <div>
-                  <span>Latest Monthly Drawing Winner</span>
-                  <strong id="winnerDisplay">{currentWinner}</strong>
-                  {giveawayEntries.length > 0 && (
-                    <small style={{ color: "var(--muted)", fontStyle: "italic", marginTop: "2px", display: "inline-block" }}>
-                      Active queue has {giveawayEntries.length} registrants inside.
-                    </small>
+            {activeLowerReplay ? (
+              <div className="w-full flex-1 flex flex-col justify-start text-left text-slate-100 font-sans text-xs relative z-10 select-none p-3 pr-4 space-y-3.5 core-display-scroller">
+                  {/* Header Row */}
+                  <div className="flex justify-between items-center border-b border-white/5 pb-2 shrink-0">
+                    <div>
+                      <span className="text-[7.5px] text-cyan-400 font-mono tracking-widest uppercase block font-semibold">
+                        {activeLowerReplay.type === 'landing' ? 'DYNAMIC LANDING REPLAY' : 
+                         activeLowerReplay.type === 'upcoming' ? 'UPCOMING MISSION DETAIL' : 'HISTORIC ARCHIVE DETAIL'}
+                      </span>
+                      <h3 className="font-space text-[11px] font-bold text-white tracking-wide truncate max-w-[210px] sm:max-w-[240px] mt-0.5" title={activeLowerReplay.title}>
+                        {activeLowerReplay.title}
+                      </h3>
+                    </div>
+                  </div>
+
+                  {/* Embedded Webcast Player */}
+                  {(activeLowerReplay.id || activeLowerReplay.video_id) ? (
+                    <div className="relative aspect-video w-full rounded-md overflow-hidden border border-slate-900 bg-black flex-shrink-0 shadow-[0_4px_12px_rgba(0,0,0,0.5)]">
+                      <iframe 
+                        src={`https://www.youtube.com/embed/${activeLowerReplay.id || activeLowerReplay.video_id}?autoplay=1&rel=0&modestbranding=1`} 
+                        title="Lower Mission webcast player" 
+                        allowFullScreen 
+                        loading="lazy" 
+                        className="w-full h-full border-0 absolute inset-0 z-10"
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                      ></iframe>
+                    </div>
+                  ) : (
+                    <div className="relative aspect-video w-full rounded-md overflow-hidden border border-slate-800/40 bg-slate-950 flex-shrink-0 shadow-[0_4px_12px_rgba(0,0,0,0.5)] flex flex-col items-center justify-center text-slate-500 font-mono text-[10px] p-4 text-center select-none">
+                      <div className="fallback-art z-0 absolute inset-0 opacity-10 pointer-events-none"></div>
+                      <Tv className="w-6 h-6 text-slate-600 mb-1.5 z-10 animate-pulse" />
+                      <span className="text-slate-400 font-semibold uppercase tracking-wider z-10">Webcast Standby</span>
+                      <span className="text-[8px] text-slate-500 mt-1 z-10">Live coverage will begin closer to launch time.</span>
+                    </div>
                   )}
+
+                  {/* Event Details */}
+                  <div className="space-y-2.5">
+                    <p className="text-[9.5px] text-slate-400 leading-relaxed bg-slate-950/40 p-2 rounded border border-white/5 font-sans">
+                      {activeLowerReplay.details || "Launch operations, telemetry replay parameters, and historic webcast details."}
+                    </p>
+
+                    {/* Telemetry Matrix Grid */}
+                    <div className="grid grid-cols-2 gap-2 text-[9px] font-mono">
+                      <div className="bg-slate-950/60 p-1.5 rounded border border-white/5 flex flex-col justify-between">
+                        <span className="text-[7px] text-slate-400 uppercase font-mono tracking-wider block">VEHICLE</span>
+                        <strong className="text-white font-semibold truncate mt-0.5">{activeLowerReplay.vehicle || "SpaceX Vehicle"}</strong>
+                      </div>
+                      <div className="bg-slate-950/60 p-1.5 rounded border border-white/5 flex flex-col justify-between">
+                        <span className="text-[7px] text-slate-400 uppercase font-mono tracking-wider block">BOOSTER / CORE</span>
+                        <strong className="text-amber-400 font-semibold truncate mt-0.5">{activeLowerReplay.booster || activeLowerReplay.coreSerial || "N/A"}</strong>
+                      </div>
+                      <div className="bg-slate-950/60 p-1.5 rounded border border-white/5 flex flex-col justify-between col-span-2">
+                        <span className="text-[7px] text-slate-400 uppercase font-mono tracking-wider block">LAUNCH / LAND PAD</span>
+                        <strong className="text-cyan-400 font-semibold truncate mt-0.5" title={activeLowerReplay.pad || activeLowerReplay.launchpad}>
+                          {activeLowerReplay.pad || activeLowerReplay.launchpad || "N/A"}
+                        </strong>
+                      </div>
+                    </div>
+
+                    {/* Landing timeline Propulsion sequence */}
+                    {activeLowerReplay.type === 'landing' && activeLowerReplay.timeline && (
+                      <div className="pt-2 border-t border-white/5 space-y-1.5">
+                        <span className="text-[7.5px] text-slate-400 font-mono tracking-wider uppercase block font-semibold">
+                          PROPULSION PROFILE SEQUENCE
+                        </span>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          {activeLowerReplay.timeline.map((step: any, i: number) => (
+                            <div 
+                              key={i}
+                              className="bg-slate-950/40 p-1.5 rounded border border-white/5 flex items-center justify-between gap-1 text-[7.5px] font-mono"
+                            >
+                              <span className="text-slate-400 truncate max-w-[70px] uppercase" title={step.label}>{step.label}</span>
+                              <div className="flex items-center gap-1 shrink-0">
+                                <span className={`w-1 h-1 rounded-full ${step.status === 'Nominal' ? 'bg-emerald-400 shadow-[0_0_4px_#10b981]' : step.status === 'Skipped' ? 'bg-slate-500' : 'bg-amber-500 animate-pulse'}`} />
+                                <span className="text-slate-300 font-bold">{step.time}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <button 
-                  type="button" 
-                  onClick={handleDrawWinner} 
-                  style={{ width: "auto", padding: "11px 18px" }}
-                >
-                  Draw Winner
-                </button>
+              ) : (
+                <div className="flex-1 flex flex-col items-center justify-center text-center p-6 space-y-3 select-none">
+                  <div className="w-10 h-10 rounded-full border border-cyan-500/20 bg-cyan-500/5 flex items-center justify-center text-cyan-400">
+                    <Tv className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="font-space text-xs font-bold text-white uppercase tracking-wider">No Replay Selected</h4>
+                    <p className="text-[10px] text-slate-400 max-w-[200px] mt-1.5 leading-relaxed">
+                      Select any video webcast from the **Dynamic Landings** or **Historic Landings** feeds to display full telemetry stats and webcast.
+                    </p>
+                  </div>
+                </div>
+              )}
+          </div>
+
+          <div className="scroll-panel-wrapper">
+            <div className="telemetry-left-empty">
+              <section className="dynamic-landings-header-module">
+              <div className="dynamic-landings-inline-title">
+                SpaceX Historic Events
+                <span className="badge animate-pulse" style={{ display: "inline-block", fontSize: "9px", padding: "1px 4px", float: "right" }}>VIDEO ARCHIVE</span>
               </div>
-              <p className="giveaway-note">* Winners are chosen directly from the local entries list. Records persist in the browser Cache.</p>
+              <div className="dynamic-landings-header-feed">
+                {SPACEX_HISTORIC_EVENTS.map((event) => {
+                  const isActive = selectedLaunch?.id === event.id || activeLowerReplay?.id === event.id;
+                  return (
+                    <div
+                      key={event.id}
+                      className={`dynamic-landings-header-card ${isActive ? 'active' : ''}`}
+                      style={{
+                        width: "100%",
+                        textAlign: "left",
+                        border: isActive ? "1px solid var(--cyan)" : "1px solid rgba(0, 231, 255, 0.10)",
+                        background: isActive ? "rgba(0, 231, 255, 0.08)" : "rgba(0, 0, 0, 0.22)",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        margin: "0 0 3px 0",
+                        padding: "4px 6px"
+                      }}
+                    >
+                      <button 
+                        onClick={() => {
+                          const customLaunch = {
+                            id: event.id,
+                            name: event.title,
+                            upcoming: false,
+                            date_utc: event.dateUtc || null,
+                            details: event.details,
+                            rocket_name: event.vehicle,
+                            launchpad_name: event.launchpad,
+                            links: {
+                              webcast: `https://www.youtube.com/watch?v=${event.video_id}`
+                            },
+                            cores: [
+                              {
+                                core: { serial: event.coreSerial || "Historic Core" },
+                                flight: event.flightNum || 1,
+                                reused: event.reused || false,
+                                landing_attempt: true,
+                                landing_success: true,
+                                landing_type: event.landingType || "LZ Landing",
+                              }
+                            ]
+                          };
+                          setSelectedLaunch(customLaunch);
+                          setActiveVideoId(event.video_id);
+                          setActiveLowerReplay({ ...event, type: 'historic' });
+                          addLog(`Loading historic flight archive webcast: ${event.title}`);
+                        }}
+                        style={{ background: 'none', border: 'none', padding: 0, margin: 0, textAlign: 'left', flex: 1, overflow: 'hidden', cursor: 'pointer', outline: 'none' }}
+                      >
+                        <span style={{ fontSize: "8px", color: "var(--cyan)", textTransform: "uppercase" }}>{event.date}</span>
+                        <strong style={{ fontSize: "10px", color: isActive ? "var(--cyan)" : "#eef8ff", display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{event.title}</strong>
+                      </button>
+                      <a 
+                        href={`https://www.youtube.com/watch?v=${event.video_id}`} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        style={{ flexShrink: 0, padding: "4px", color: "var(--muted)" }}
+                        title="Open YouTube Media Link in new tab"
+                      >
+                         <Tv size={12} className="hover:text-cyan-400 transition-colors" />
+                      </a>
+                    </div>
+                  );
+                })}
+              </div>
             </section>
           </div>
-        )}
-
-        {lowerTab === 'premium' && (
-          <div className="animate-in fade-in slide-in-from-bottom-2 duration-500 w-full max-w-5xl mx-auto px-4 sm:px-6 mt-8">
-            <div className="bg-[#0b101a] border border-[#ff6b2b]/30 shadow-[0_0_40px_rgba(255,107,43,0.05)] rounded-2xl overflow-hidden relative">
-              <div className="absolute top-0 right-0 p-6 opacity-10">
-                <Shield size={200} />
-              </div>
-              <div className="p-8 sm:p-12 relative z-10 border-b border-white/5 bg-gradient-to-br from-[#121826] to-transparent">
-                <div className="flex items-center gap-3 mb-4 text-[#ff6b2b] font-space tracking-widest text-sm uppercase font-bold">
-                  <Star size={18} className="animate-pulse" />
-                  Premium Subscription Tier
-                </div>
-                <h2 className="text-3xl sm:text-5xl font-mono tracking-tighter text-white font-bold mb-4">
-                  Mission Tracker <span className="text-[#ff6b2b]">Pro</span>
-                </h2>
-                <p className="text-slate-400 text-base sm:text-lg max-w-2xl leading-relaxed">
-                  A premium tier designed for hardcore space enthusiasts, aerospace students, and industry professionals. Unlock deep technical data, real-time advanced telemetry, and personalized tracking features.
-                </p>
-                <div className="mt-8">
-                  <button className="bg-[#ff6b2b]/10 hover:bg-[#ff6b2b]/20 text-[#ff6b2b] border border-[#ff6b2b]/50 px-6 py-3 rounded uppercase font-space text-sm tracking-widest font-bold transition-colors">
-                    Join Waiting List
-                  </button>
-                </div>
-              </div>
-              
-              <div className="grid md:grid-cols-2 gap-px bg-white/5">
-                <div className="bg-[#0b101a] p-8 sm:p-10">
-                  <div className="flex items-center gap-4 mb-6">
-                    <div className="p-3 bg-blue-500/10 rounded border border-blue-500/20 text-blue-400">
-                      <Gauge size={24} />
-                    </div>
-                    <h3 className="text-xl font-bold text-white tracking-tight">Advanced Control Center</h3>
-                  </div>
-                  <ul className="space-y-4">
-                    <li className="flex items-start gap-3">
-                      <Target size={16} className="text-slate-500 mt-1 shrink-0" />
-                      <span className="text-slate-300"><strong className="text-white">Custom Layouts:</strong> Draggable, resizable widgets allowing users to build their own personalized Mission Control view.</span>
-                    </li>
-                    <li className="flex items-start gap-3">
-                      <Target size={16} className="text-slate-500 mt-1 shrink-0" />
-                      <span className="text-slate-300"><strong className="text-white">Multi-Mission:</strong> Ability to track multiple simultaneous historical or upcoming missions side-by-side.</span>
-                    </li>
-                    <li className="flex items-start gap-3">
-                      <Target size={16} className="text-slate-500 mt-1 shrink-0" />
-                      <span className="text-slate-300"><strong className="text-white">Ad-Free Experience:</strong> A clean, premium environment without advertising interruptions.</span>
-                    </li>
-                  </ul>
-                </div>
-
-                <div className="bg-[#0b101a] p-8 sm:p-10">
-                  <div className="flex items-center gap-4 mb-6">
-                    <div className="p-3 bg-purple-500/10 rounded border border-purple-500/20 text-purple-400">
-                      <Globe size={24} />
-                    </div>
-                    <h3 className="text-xl font-bold text-white tracking-tight">Trajectory Projections</h3>
-                  </div>
-                  
-                  {/* Trajectory Simulation Widget for Pro Showcase */}
-                  <div className="mb-6 pointer-events-none opacity-80" style={{ filter: 'grayscale(0.5)' }}>
-                    <TrajectoryChart id="pro_preview" flightNumber={100} />
-                  </div>
-
-                  <ul className="space-y-4">
-                    <li className="flex items-start gap-3">
-                      <Target size={16} className="text-slate-500 mt-1 shrink-0" />
-                      <span className="text-slate-300"><strong className="text-white">Trajectory Simulations:</strong> Accurate flight path predictions and post-launch trajectory analysis.</span>
-                    </li>
-                    <li className="flex items-start gap-3">
-                      <Target size={16} className="text-slate-500 mt-1 shrink-0" />
-                      <span className="text-slate-300"><strong className="text-white">Mission Timelines:</strong> Advanced sequence of events estimations for future launches.</span>
-                    </li>
-                    <li className="flex items-start gap-3">
-                      <Target size={16} className="text-slate-500 mt-1 shrink-0" />
-                      <span className="text-slate-300"><strong className="text-white">Historical Profiling:</strong> Visual breakdowns and charts of past flight profiles.</span>
-                    </li>
-                  </ul>
-                </div>
-                
-                <div className="bg-[#0b101a] p-8 sm:p-10">
-                  <div className="flex items-center gap-4 mb-6">
-                    <div className="p-3 bg-emerald-500/10 rounded border border-emerald-500/20 text-emerald-400">
-                      <Rocket size={24} />
-                    </div>
-                    <h3 className="text-xl font-bold text-white tracking-tight">Deep Analytics</h3>
-                  </div>
-                  <ul className="space-y-4">
-                    <li className="flex items-start gap-3">
-                      <Target size={16} className="text-slate-500 mt-1 shrink-0" />
-                      <span className="text-slate-300"><strong className="text-white">Rocket Metrics:</strong> Deep dives into booster reusability history, turnaround times, and payload capacity.</span>
-                    </li>
-                    <li className="flex items-start gap-3">
-                      <Target size={16} className="text-slate-500 mt-1 shrink-0" />
-                      <span className="text-slate-300"><strong className="text-white">Proactive Alerts:</strong> SMS/email notifications for specific mission events (e.g., T-10 mins, weather changes).</span>
-                    </li>
-                    <li className="flex items-start gap-3">
-                      <Target size={16} className="text-slate-500 mt-1 shrink-0" />
-                      <span className="text-slate-300"><strong className="text-white">Launch Weather:</strong> Advanced localized forecasting modeling for targeted launch windows.</span>
-                    </li>
-                  </ul>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        </div>
-
-        {/* SpaceX Media & Social Network hub */}
-        <section className="social-hub">
-          <div className="social-hub-title">
-            <h2>Mission Social Network</h2>
-            <span className="badge">CHANNELS</span>
-          </div>
-          <div id="socialHubGrid" className="social-grid social-logo-grid">
-            <a className="social-card social-logo-card space-x-logo" href="https://www.spacex.com/" target="_blank" rel="noopener noreferrer" style={{ justifyContent: "center" }}>
-              <Globe style={{ width: "24px", height: "auto" }} />
-            </a>
-            <a className="social-card social-logo-card x-logo" href="https://x.com/SpaceX" target="_blank" rel="noopener noreferrer" style={{ justifyContent: "center" }}>
-              <Twitter style={{ width: "24px", height: "auto" }} />
-            </a>
-            <a className="social-card social-logo-card youtube-logo" href="https://www.youtube.com/@SpaceX" target="_blank" rel="noopener noreferrer" style={{ justifyContent: "center" }}>
-              <Youtube style={{ width: "24px", height: "auto" }} />
-            </a>
-            <a className="social-card social-logo-card instagram-logo" href="https://www.instagram.com/spacex/" target="_blank" rel="noopener noreferrer" style={{ justifyContent: "center" }}>
-              <Instagram style={{ width: "24px", height: "auto" }} />
-            </a>
-            <a className="social-card social-logo-card flickr-logo" href="https://www.flickr.com/photos/spacex/" target="_blank" rel="noopener noreferrer" style={{ justifyContent: "center" }}>
-              <Camera style={{ width: "24px", height: "auto" }} />
-            </a>
           </div>
         </section>
 
-        {/* Drive Data Sync Section */}
-        <section className="bg-slate-900/60 border border-slate-700/50 rounded-2xl p-6 md:p-8 mt-12 w-[min(1400px,94vw)] mx-auto shadow-lg relative overflow-hidden backdrop-blur-sm">
-          <div className="absolute top-0 left-0 w-[2px] h-full bg-gradient-to-b from-cyan-400 to-blue-600 shadow-[0_0_10px_rgba(0,231,255,0.4)]"></div>
-          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-6 relative z-10">
-            <div className="flex-1">
-              <h2 className="text-xl font-space font-medium text-white mb-2 flex items-center gap-2">
-                <DownloadCloud className="w-5 h-5 text-cyan-400" />
-                System Source Backup
-              </h2>
-              <p className="text-slate-400 text-sm leading-relaxed max-w-2xl">
-                Securely stream a local working copy of the current Mission Control transmission directly to your Google Drive ecosystem. Data transfers require active Google Workspace credentials to proceed.
-              </p>
-            </div>
-            <div className="flex-shrink-0 w-full md:w-auto">
-              {!authToken ? (
-                 <button 
-                   onClick={handleLogin}
-                   disabled={isLoggingIn}
-                   className="w-full md:w-auto gsi-material-button bg-white hover:bg-slate-50 transition-colors rounded-md shadow-md border border-slate-200 p-1 flex items-center pr-4 disabled:opacity-50"
-                 >
-                   <div className="p-2 bg-white rounded-l-md mr-3">
-                     <svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" className="w-5 h-5 block">
-                       <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"></path>
-                       <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"></path>
-                       <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"></path>
-                       <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"></path>
-                       <path fill="none" d="M0 0h48v48H0z"></path>
-                     </svg>
-                   </div>
-                   <span className="font-roboto text-sm font-medium text-slate-600 tracking-wide">
-                     {isLoggingIn ? "Authenticating..." : "Sign in with Google"}
-                   </span>
-                 </button>
-              ) : (
-                 <button 
-                   onClick={handleBackupToDrive}
-                   disabled={isBackingUp}
-                   className="w-full md:w-auto bg-gradient-to-r from-cyan-600 to-blue-700 hover:from-cyan-500 hover:to-blue-600 text-white font-medium py-3 px-6 rounded-lg transition-all duration-300 shadow-[0_0_15px_rgba(0,231,255,0.2)] hover:shadow-[0_0_25px_rgba(0,231,255,0.4)] disabled:opacity-50 disabled:pointer-events-none flex items-center justify-center gap-2"
-                 >
-                   <DownloadCloud className={`w-4 h-4 ${isBackingUp ? 'animate-bounce' : ''}`} />
-                   {isBackingUp ? "Transmitting..." : "Push to Google Drive"}
-                 </button>
-              )}
-            </div>
-          </div>
-        </section>
 
-        {/* Dynamic Vector One Labs© subtler branding footer */}
-        <footer className="vector-footer-logo-row pb-8">
-          <img 
-            src={`/vector_labs_logo.png?v=${Date.now()}`}
-            alt="Vector One Labs AI Logo" 
-            referrerPolicy="no-referrer"
-          />
-        </footer>
 
+
+
+
+
+        {/* Development News / Intelligence Briefings bento module */}
+        
+        <LowerFeaturesArea
+          lowerTab={lowerTab}
+          news={news}
+          giveawayName={giveawayName}
+          setGiveawayName={setGiveawayName}
+          giveawayEmail={giveawayEmail}
+          setGiveawayEmail={setGiveawayEmail}
+          giveawayEntries={giveawayEntries}
+          currentWinner={currentWinner}
+          handleGiveawaySubmit={handleGiveawaySubmit}
+          handleDrawWinner={handleDrawWinner}
+          needsAuth={needsAuth}
+          isLoggingIn={isLoggingIn}
+          isBackingUp={isBackingUp}
+          handleLogin={handleLogin}
+          handleBackupToDrive={handleBackupToDrive}
+        />
       </main>
     </div>
   );

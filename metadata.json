@@ -1,6 +1,6 @@
 {
-  "name": "SpaceX Mission Tracker",
-  "description": "A comprehensive SpaceX mission tracker displaying real-time launch schedules, rocket specifications, landing stats, and interactive analytics.",
+  "name": "SpaceX Launch Tracker",
+  "description": "Real-time SpaceX Launch Updates, Mission History, News & Rocket Details.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

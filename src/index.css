@@ -392,14 +392,14 @@ html {
 
 .countdown-panel {
   grid-template-columns: minmax(0, 1fr) minmax(280px, 1.25fr) minmax(0, 1fr) !important;
-  min-height: 380px !important;
+  min-height: 480px !important;
   gap: 12px !important;
 }
 
 @media (min-width: 1101px) {
   .countdown-panel {
-    height: 380px !important;
-    max-height: 380px !important;
+    height: 480px !important;
+    max-height: 480px !important;
   }
 }
 
@@ -1186,8 +1186,8 @@ header.topbar{
   justify-content:center !important;
   align-items:center !important;
   text-align:center !important;
-  padding: 14px 20px !important;
-  min-height: 88px !important;
+  padding: 6px 16px !important;
+  min-height: auto !important;
 }
 
 .header-logo-inside-box{
@@ -1195,7 +1195,7 @@ header.topbar{
   display:flex !important;
   justify-content:center !important;
   align-items:center !important;
-  margin: 0 auto -4px auto !important;
+  margin: 0 auto -6px auto !important;
   position:relative !important;
   z-index:50 !important;
 }
@@ -1250,12 +1250,12 @@ header.topbar small {
   display: block !important;
   width:100% !important;
   text-align:center !important;
-  margin:6px auto 0 auto !important;
+  margin:2px auto 0 auto !important;
   color:#38bdf8 !important;
-  font-size:clamp(15px, 1.44vw, 21px) !important;
+  font-size:clamp(14px, 1.3vw, 19px) !important;
   font-weight:600 !important;
   letter-spacing:.055em !important;
-  line-height:1.35 !important;
+  line-height:1.25 !important;
   text-shadow: 0 0 20px rgba(0, 231, 255, 0.5) !important;
 }
 
@@ -1365,4 +1365,28 @@ header.topbar small {
     border-bottom-left-radius: 12px !important;
     border-bottom-right-radius: 12px !important;
   }
+}
+
+/* Scroll wrapper for countdown-core mission display */
+.core-display-scroller {
+  overflow-y: auto !important;
+  scrollbar-width: thin;
+}
+
+.core-display-scroller::-webkit-scrollbar {
+  width: 4px;
+}
+
+.core-display-scroller::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+.core-display-scroller::-webkit-scrollbar-thumb {
+  background: rgba(0, 231, 255, 0.3);
+  border-radius: 4px;
+}
+
+.core-display-scroller::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 231, 255, 0.5);
 }
