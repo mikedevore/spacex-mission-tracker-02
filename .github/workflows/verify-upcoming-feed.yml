@@ -1,10 +1,15 @@
 name: Verify Upcoming Feed Preview
 
 on:
-  pull_request:
+  push:
     branches:
-      - fix/live-feed-preview
+      - fix/upcoming-x-broadcast-feed
   workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
 
 jobs:
   verify-preview:
@@ -12,6 +17,7 @@ jobs:
     timeout-minutes: 15
     env:
       PREVIEW_URL: https://spacex-mission-tracker-02-git-fix-upc-3cddcd-vectore-on-labs-ai.vercel.app
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
 
@@ -116,6 +122,7 @@ jobs:
             console.log(JSON.stringify(report, null, 2));
             await browser.close();
           })().catch(error => {
+            fs.writeFileSync('/tmp/upcoming-feed-error.txt', String(error?.stack || error));
             console.error(error);
             process.exit(1);
           });
@@ -130,4 +137,44 @@ jobs:
           path: |
             /tmp/upcoming-feed-report.json
             /tmp/upcoming-feed-preview.png
+            /tmp/upcoming-feed-error.txt
           if-no-files-found: warn
+
+      - name: Post successful verification report
+        if: success()
+        run: |
+          python - <<'PY' > /tmp/verification-comment.md
+          import json
+          report = json.load(open('/tmp/upcoming-feed-report.json'))
+          print('### ✅ Automated upcoming-feed verification passed')
+          print()
+          print(f"- Missions rendered: **{report['missionCount']}**")
+          print(f"- Missions with live buttons: **{report['missionCount']}**")
+          print(f"- Confirmed direct broadcasts: **{report['confirmedCount']}**")
+          print(f"- Mission-specific X live-search fallbacks: **{report['fallbackCount']}**")
+          print(f"- LL2 detail proxy checks: **{len(report['proxyChecks'])} passed**")
+          print('- Generic `https://x.com/SpaceX` links: **0**')
+          print()
+          print('| Mission | Button | Destination type |')
+          print('|---|---|---|')
+          for mission in report['missions']:
+              destination = 'Confirmed webcast' if mission['linkType'] == 'confirmed-webcast' else 'Mission-specific X live search'
+              print(f"| {mission['name'].replace('|', '/')} | {mission['label']} | {destination} |")
+          PY
+          gh pr comment 4 --repo "$GITHUB_REPOSITORY" --body-file /tmp/verification-comment.md
+
+      - name: Post failed verification report
+        if: failure()
+        run: |
+          {
+            echo '### ❌ Automated upcoming-feed verification failed'
+            echo
+            echo 'The preview was not approved for merging. The workflow logs and uploaded verification artifact contain the failure details.'
+            if [ -f /tmp/upcoming-feed-error.txt ]; then
+              echo
+              echo '```text'
+              head -80 /tmp/upcoming-feed-error.txt
+              echo '```'
+            fi
+          } > /tmp/verification-comment.md
+          gh pr comment 4 --repo "$GITHUB_REPOSITORY" --body-file /tmp/verification-comment.md
