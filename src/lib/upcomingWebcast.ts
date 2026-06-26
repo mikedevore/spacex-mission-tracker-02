@@ -1,4 +1,4 @@
-const CACHE_PREFIX = 'spacex-upcoming-webcast-v2:';
+const CACHE_PREFIX = 'spacex-upcoming-webcast-v3:';
 const CACHE_TTL = 30 * 60 * 1000;
 
 const GENERIC_SPACEX_X_PROFILE = /^https?:\/\/(?:www\.)?(?:x|twitter)\.com\/SpaceX\/?(?:\?.*)?$/i;
@@ -34,23 +34,19 @@ function collectUrls(value: unknown, output: string[] = []): string[] {
 function scoreBroadcastUrl(url: string): number {
   if (/(?:x|twitter)\.com\/i\/broadcasts\//i.test(url)) return 100;
   if (/(?:x|twitter)\.com\/SpaceX\/status\//i.test(url)) return 95;
-  if (/youtube\.com\/(?:watch|live)|youtu\.be\//i.test(url)) return 90;
-  if (/\b(?:webcast|broadcast|livestream|live-stream)\b/i.test(url)) return 70;
+  if (/spacex\.com\/launches\//i.test(url)) return 80;
   return 0;
 }
 
 export function getDirectUpcomingWebcast(mission: any): string {
-  const youtubeId = mission?.links?.youtube_id;
   const candidates = collectUrls([
     mission?.links?.webcast,
-    youtubeId ? `https://www.youtube.com/watch?v=${youtubeId}` : '',
     mission?.webcast,
     mission?.videoUrl,
     mission?.video_url,
     mission?.vidURL,
     mission?.vid_url,
     mission?.live_url,
-    mission?.youtube_url,
     mission?.vidURLs,
     mission?.vid_urls,
     mission?.ll2,
@@ -163,16 +159,4 @@ export async function resolveUpcomingWebcast(mission: any): Promise<string> {
 
   writeCache(ll2Id, null);
   return '';
-}
-
-export function getUpcomingLiveFallback(mission: any): string {
-  const missionName = String(mission?.name || 'SpaceX mission').trim();
-  const query = `from:SpaceX \"${missionName}\" live`;
-  return `https://x.com/search?q=${encodeURIComponent(query)}&src=typed_query&f=live`;
-}
-
-export function upcomingWebcastLabel(url: string): string {
-  if (/(?:x|twitter)\.com/i.test(url)) return 'X Live';
-  if (/youtube\.com|youtu\.be/i.test(url)) return 'YouTube Live';
-  return 'Webcast';
 }
