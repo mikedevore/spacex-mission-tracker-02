@@ -11,8 +11,6 @@ interface UpcomingMissionsPanelProps {
   selectMission: (id: string, initial?: boolean) => void;
 }
 
-const SPACEX_STREAMS_URL = 'https://www.youtube.com/@SpaceX/streams';
-
 export default function UpcomingMissionsPanel({
   loading,
   filteredUpcoming,
@@ -66,7 +64,6 @@ export default function UpcomingMissionsPanel({
             const missionId = String(mission?.id || '');
             const isSelect = selectedLaunch && selectedLaunch.id === mission.id;
             const confirmedWebcast = getDirectUpcomingWebcast(mission) || resolvedWebcasts[missionId] || '';
-            const webcastUrl = confirmedWebcast || SPACEX_STREAMS_URL;
 
             return (
               <div 
@@ -89,16 +86,26 @@ export default function UpcomingMissionsPanel({
                   </span>
                 </div>
                 <div className="feed-links">
-                  <a 
-                    className="feed-video-link"
-                    href={webcastUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    data-link-type={confirmedWebcast ? 'confirmed-webcast' : 'official-streams-page'}
-                    onClick={(e) => { e.stopPropagation(); }}
-                  >
-                    Webcast
-                  </a>
+                  {confirmedWebcast ? (
+                    <a 
+                      className="feed-video-link"
+                      href={confirmedWebcast}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      data-link-type="confirmed-webcast"
+                      onClick={(e) => { e.stopPropagation(); }}
+                    >
+                      Webcast
+                    </a>
+                  ) : (
+                    <span
+                      className="feed-video-link feed-video-missing"
+                      aria-disabled="true"
+                      title="Webcast has not been published yet"
+                    >
+                      Webcast
+                    </span>
+                  )}
                 </div>
               </div>
             );
