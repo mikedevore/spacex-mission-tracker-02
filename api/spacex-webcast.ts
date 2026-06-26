@@ -1,20 +1,13 @@
 const SPACEX_PAGE_PATTERN = /^https?:\/\/(?:www\.)?spacex\.com\//i;
-const BROADCAST_PATTERNS = [
-  /https?:\/\/(?:www\.)?(?:x|twitter)\.com\/i\/broadcasts\/[A-Za-z0-9_-]+/i,
-  /https?:\\\/\\\/(?:www\\\.)?(?:x|twitter)\\\.com\\\/i\\\/broadcasts\\\/[A-Za-z0-9_-]+/i,
-];
+const BROADCAST_PATTERN = /https?:\/\/(?:www\.)?(?:x|twitter)\.com\/i\/broadcasts\/[A-Za-z0-9_-]+/i;
 
 function extractBroadcastUrl(html: string): string {
-  for (const pattern of BROADCAST_PATTERNS) {
-    const match = html.match(pattern);
-    if (!match?.[0]) continue;
+  const normalizedHtml = html
+    .split('\\/').join('/')
+    .split('\\u0026').join('&')
+    .replace(/&amp;/g, '&');
 
-    return match[0]
-      .replace(/\\\//g, '/')
-      .replace(/\\u0026/g, '&');
-  }
-
-  return '';
+  return normalizedHtml.match(BROADCAST_PATTERN)?.[0] || '';
 }
 
 export default async function handler(req: any, res: any) {
