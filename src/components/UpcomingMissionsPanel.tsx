@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   getDirectUpcomingWebcast,
+  getUpcomingLiveFallback,
   resolveUpcomingWebcast,
   upcomingWebcastLabel,
 } from '../lib/upcomingWebcast';
@@ -20,32 +21,30 @@ export default function UpcomingMissionsPanel({
 }: UpcomingMissionsPanelProps) {
   const [resolvedWebcasts, setResolvedWebcasts] = useState<Record<string, string>>({});
   const [resolvingWebcasts, setResolvingWebcasts] = useState<Record<string, boolean>>({});
-  const [checkedWebcasts, setCheckedWebcasts] = useState<Record<string, boolean>>({});
-  const requestedMissionIds = useRef(new Set<string>());
-  const isMounted = useRef(true);
+  const attemptedMissionIds = useRef(new Set<string>());
+  const isMounted = useRef(false);
 
-  useEffect(() => () => {
-    isMounted.current = false;
+  useEffect(() => {
+    isMounted.current = true;
+    return () => {
+      isMounted.current = false;
+    };
   }, []);
 
   useEffect(() => {
     filteredUpcoming.forEach((mission) => {
       const missionId = String(mission?.id || '');
-      if (!missionId || getDirectUpcomingWebcast(mission) || requestedMissionIds.current.has(missionId)) return;
+      if (!missionId || getDirectUpcomingWebcast(mission) || attemptedMissionIds.current.has(missionId)) return;
 
-      requestedMissionIds.current.add(missionId);
+      attemptedMissionIds.current.add(missionId);
       setResolvingWebcasts((current) => ({ ...current, [missionId]: true }));
 
       resolveUpcomingWebcast(mission)
         .then((url) => {
-          if (!isMounted.current) return;
-          if (url) {
-            setResolvedWebcasts((current) => ({ ...current, [missionId]: url }));
-          }
-          setCheckedWebcasts((current) => ({ ...current, [missionId]: true }));
+          if (!isMounted.current || !url) return;
+          setResolvedWebcasts((current) => ({ ...current, [missionId]: url }));
         })
         .finally(() => {
-          requestedMissionIds.current.delete(missionId);
           if (isMounted.current) {
             setResolvingWebcasts((current) => ({ ...current, [missionId]: false }));
           }
@@ -75,9 +74,14 @@ export default function UpcomingMissionsPanel({
           filteredUpcoming.map((mission) => {
             const missionId = String(mission?.id || '');
             const isSelect = selectedLaunch && selectedLaunch.id === mission.id;
-            const webcastUrl = getDirectUpcomingWebcast(mission) || resolvedWebcasts[missionId] || '';
+            const confirmedWebcast = getDirectUpcomingWebcast(mission) || resolvedWebcasts[missionId] || '';
             const isResolving = Boolean(resolvingWebcasts[missionId]);
-            const hasChecked = Boolean(checkedWebcasts[missionId]);
+            const webcastUrl = confirmedWebcast || getUpcomingLiveFallback(mission);
+            const linkLabel = confirmedWebcast
+              ? upcomingWebcastLabel(confirmedWebcast)
+              : isResolving
+                ? 'Finding Live...'
+                : 'Find Live on X';
 
             return (
               <div 
@@ -100,21 +104,16 @@ export default function UpcomingMissionsPanel({
                   </span>
                 </div>
                 <div className="feed-links">
-                  {webcastUrl ? (
-                    <a 
-                      className="feed-video-link"
-                      href={webcastUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      onClick={(e) => { e.stopPropagation(); }}
-                    >
-                      {upcomingWebcastLabel(webcastUrl)}
-                    </a>
-                  ) : (
-                    <span className="feed-video-missing">
-                      {isResolving ? 'Locating broadcast...' : hasChecked ? 'Broadcast not posted' : 'Checking broadcast...'}
-                    </span>
-                  )}
+                  <a 
+                    className="feed-video-link"
+                    href={webcastUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    data-link-type={confirmedWebcast ? 'confirmed-webcast' : 'mission-live-search'}
+                    onClick={(e) => { e.stopPropagation(); }}
+                  >
+                    {linkLabel}
+                  </a>
                 </div>
               </div>
             );
