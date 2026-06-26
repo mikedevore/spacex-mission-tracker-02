@@ -1,4 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  getDirectPastWebcast,
+  getPastWebcastFallback,
+  resolvePastWebcast,
+} from '../lib/pastWebcast';
 
 interface RecentMissionsPanelProps {
   loading: boolean;
@@ -14,7 +19,30 @@ export default function RecentMissionsPanel({
   selectMission
 }: RecentMissionsPanelProps) {
   const [landingsOnly, setLandingsOnly] = useState(false);
+  const [resolvedWebcasts, setResolvedWebcasts] = useState<Record<string, string>>({});
+  const attemptedMissionIds = useRef(new Set<string>());
+  const isMounted = useRef(false);
   const displayedMissions = landingsOnly ? filteredPast.filter(m => m.has_landing) : filteredPast;
+
+  useEffect(() => {
+    isMounted.current = true;
+    return () => {
+      isMounted.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    displayedMissions.forEach((mission) => {
+      const missionId = String(mission?.id || '');
+      if (!missionId || getDirectPastWebcast(mission) || attemptedMissionIds.current.has(missionId)) return;
+
+      attemptedMissionIds.current.add(missionId);
+      resolvePastWebcast(mission).then((url) => {
+        if (!isMounted.current || !url) return;
+        setResolvedWebcasts((current) => ({ ...current, [missionId]: url }));
+      });
+    });
+  }, [displayedMissions]);
 
   return (
     <aside className="panel history-panel">
@@ -57,11 +85,10 @@ export default function RecentMissionsPanel({
           </div>
         ) : (
           displayedMissions.map((mission) => {
+            const missionId = String(mission?.id || '');
             const isSelect = selectedLaunch && selectedLaunch.id === mission.id;
-            
-            // Extract a valid webcast URL if possible
-            const youtubeId = mission?.links?.youtube_id;
-            const webcastUrl = mission?.links?.webcast || (youtubeId ? `https://www.youtube.com/watch?v=${youtubeId}` : "") || mission?.ll2?.webcast || "";
+            const confirmedWebcast = getDirectPastWebcast(mission) || resolvedWebcasts[missionId] || '';
+            const webcastUrl = confirmedWebcast || getPastWebcastFallback(mission);
 
             return (
               <div 
@@ -84,19 +111,16 @@ export default function RecentMissionsPanel({
                   </span>
                 </div>
                 <div className="feed-links">
-                  {webcastUrl ? (
-                    <a 
-                      className="feed-video-link"
-                      href={webcastUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      onClick={(e) => { e.stopPropagation(); }}
-                    >
-                      Webcast
-                    </a>
-                  ) : (
-                    <span className="feed-video-missing">No media link</span>
-                  )}
+                  <a 
+                    className="feed-video-link"
+                    href={webcastUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    data-link-type={confirmedWebcast ? 'confirmed-webcast' : 'youtube-search'}
+                    onClick={(e) => { e.stopPropagation(); }}
+                  >
+                    Webcast
+                  </a>
                 </div>
               </div>
             );
