@@ -1,9 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   getDirectUpcomingWebcast,
-  getUpcomingLiveFallback,
   resolveUpcomingWebcast,
-  upcomingWebcastLabel,
 } from '../lib/upcomingWebcast';
 
 interface UpcomingMissionsPanelProps {
@@ -13,6 +11,8 @@ interface UpcomingMissionsPanelProps {
   selectMission: (id: string, initial?: boolean) => void;
 }
 
+const SPACEX_STREAMS_URL = 'https://www.youtube.com/@SpaceX/streams';
+
 export default function UpcomingMissionsPanel({
   loading,
   filteredUpcoming,
@@ -20,7 +20,6 @@ export default function UpcomingMissionsPanel({
   selectMission
 }: UpcomingMissionsPanelProps) {
   const [resolvedWebcasts, setResolvedWebcasts] = useState<Record<string, string>>({});
-  const [resolvingWebcasts, setResolvingWebcasts] = useState<Record<string, boolean>>({});
   const attemptedMissionIds = useRef(new Set<string>());
   const isMounted = useRef(false);
 
@@ -37,18 +36,10 @@ export default function UpcomingMissionsPanel({
       if (!missionId || getDirectUpcomingWebcast(mission) || attemptedMissionIds.current.has(missionId)) return;
 
       attemptedMissionIds.current.add(missionId);
-      setResolvingWebcasts((current) => ({ ...current, [missionId]: true }));
-
-      resolveUpcomingWebcast(mission)
-        .then((url) => {
-          if (!isMounted.current || !url) return;
-          setResolvedWebcasts((current) => ({ ...current, [missionId]: url }));
-        })
-        .finally(() => {
-          if (isMounted.current) {
-            setResolvingWebcasts((current) => ({ ...current, [missionId]: false }));
-          }
-        });
+      resolveUpcomingWebcast(mission).then((url) => {
+        if (!isMounted.current || !url) return;
+        setResolvedWebcasts((current) => ({ ...current, [missionId]: url }));
+      });
     });
   }, [filteredUpcoming]);
 
@@ -75,13 +66,7 @@ export default function UpcomingMissionsPanel({
             const missionId = String(mission?.id || '');
             const isSelect = selectedLaunch && selectedLaunch.id === mission.id;
             const confirmedWebcast = getDirectUpcomingWebcast(mission) || resolvedWebcasts[missionId] || '';
-            const isResolving = Boolean(resolvingWebcasts[missionId]);
-            const webcastUrl = confirmedWebcast || getUpcomingLiveFallback(mission);
-            const linkLabel = confirmedWebcast
-              ? upcomingWebcastLabel(confirmedWebcast)
-              : isResolving
-                ? 'Finding Live...'
-                : 'Find Live on X';
+            const webcastUrl = confirmedWebcast || SPACEX_STREAMS_URL;
 
             return (
               <div 
@@ -109,10 +94,10 @@ export default function UpcomingMissionsPanel({
                     href={webcastUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    data-link-type={confirmedWebcast ? 'confirmed-webcast' : 'mission-live-search'}
+                    data-link-type={confirmedWebcast ? 'confirmed-webcast' : 'official-streams-page'}
                     onClick={(e) => { e.stopPropagation(); }}
                   >
-                    {linkLabel}
+                    Webcast
                   </a>
                 </div>
               </div>
