@@ -1,7 +1,9 @@
-const CACHE_PREFIX = 'spacex-upcoming-webcast-v3:';
+const CACHE_PREFIX = 'spacex-upcoming-webcast-v4:';
 const CACHE_TTL = 30 * 60 * 1000;
 
 const GENERIC_SPACEX_X_PROFILE = /^https?:\/\/(?:www\.)?(?:x|twitter)\.com\/SpaceX\/?(?:\?.*)?$/i;
+const DIRECT_BROADCAST_PATTERN = /^https?:\/\/(?:www\.)?(?:x|twitter)\.com\/(?:i\/broadcasts\/[A-Za-z0-9_-]+|SpaceX\/status\/[A-Za-z0-9_-]+)/i;
+const SPACEX_PAGE_PATTERN = /^https?:\/\/(?:www\.)?spacex\.com\//i;
 
 function cleanUrl(value: unknown): string {
   if (typeof value !== 'string') return '';
@@ -31,15 +33,25 @@ function collectUrls(value: unknown, output: string[] = []): string[] {
   return output;
 }
 
-function scoreBroadcastUrl(url: string): number {
-  if (/(?:x|twitter)\.com\/i\/broadcasts\//i.test(url)) return 100;
-  if (/(?:x|twitter)\.com\/SpaceX\/status\//i.test(url)) return 95;
-  if (/spacex\.com\/launches\//i.test(url)) return 80;
-  return 0;
+function uniqueUrls(values: unknown[]): string[] {
+  const seen = new Set<string>();
+  return collectUrls(values).filter((url) => {
+    if (seen.has(url)) return false;
+    seen.add(url);
+    return true;
+  });
+}
+
+function findDirectBroadcast(values: unknown[]): string {
+  return uniqueUrls(values).find((url) => DIRECT_BROADCAST_PATTERN.test(url)) || '';
+}
+
+function findSpaceXPages(values: unknown[]): string[] {
+  return uniqueUrls(values).filter((url) => SPACEX_PAGE_PATTERN.test(url));
 }
 
 export function getDirectUpcomingWebcast(mission: any): string {
-  const candidates = collectUrls([
+  return findDirectBroadcast([
     mission?.links?.webcast,
     mission?.webcast,
     mission?.videoUrl,
@@ -53,11 +65,6 @@ export function getDirectUpcomingWebcast(mission: any): string {
     mission?.raw,
     mission?.rawLL2,
   ]);
-
-  return candidates
-    .map((url, index) => ({ url, index, score: scoreBroadcastUrl(url) }))
-    .filter((candidate) => candidate.score > 0)
-    .sort((a, b) => b.score - a.score || a.index - b.index)[0]?.url || '';
 }
 
 function getLl2LaunchId(mission: any): string {
@@ -92,13 +99,13 @@ function writeCache(id: string, url: string | null) {
       url,
     }));
   } catch {
-    // Storage can be unavailable in private browsing; resolution still works.
+    // Browser storage is optional; live resolution still works without it.
   }
 }
 
 async function fetchJson(url: string): Promise<any | null> {
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 7000);
+  const timeout = window.setTimeout(() => controller.abort(), 12000);
 
   try {
     const response = await fetch(url, {
@@ -113,22 +120,42 @@ async function fetchJson(url: string): Promise<any | null> {
   }
 }
 
-function extractDetailWebcast(detail: any): string {
-  const candidates = collectUrls([
+async function resolveSpaceXPage(spacexUrl: string): Promise<string> {
+  const result = await fetchJson(`/api/spacex-webcast?url=${encodeURIComponent(spacexUrl)}`);
+  const broadcastUrl = cleanUrl(result?.broadcastUrl);
+  return DIRECT_BROADCAST_PATTERN.test(broadcastUrl) ? broadcastUrl : '';
+}
+
+async function resolveFromSpaceXPages(pages: string[]): Promise<string> {
+  for (const page of pages) {
+    const broadcast = await resolveSpaceXPage(page);
+    if (broadcast) return broadcast;
+  }
+  return '';
+}
+
+function detailBroadcast(detail: any): string {
+  return findDirectBroadcast([
     detail?.vidURLs,
     detail?.vidurls,
     detail?.vid_urls,
     detail?.video_urls,
     detail?.videos,
-    detail?.infoURLs,
-    detail?.info_urls,
     typeof detail?.webcast_live === 'string' ? detail.webcast_live : '',
   ]);
+}
 
-  return candidates
-    .map((url, index) => ({ url, index, score: scoreBroadcastUrl(url) }))
-    .filter((candidate) => candidate.score > 0)
-    .sort((a, b) => b.score - a.score || a.index - b.index)[0]?.url || '';
+function detailSpaceXPages(detail: any): string[] {
+  return findSpaceXPages([
+    detail?.infoURLs,
+    detail?.infourls,
+    detail?.info_urls,
+    detail?.vidURLs,
+    detail?.vidurls,
+    detail?.vid_urls,
+    detail?.video_urls,
+    detail?.videos,
+  ]);
 }
 
 export async function resolveUpcomingWebcast(mission: any): Promise<string> {
@@ -136,27 +163,54 @@ export async function resolveUpcomingWebcast(mission: any): Promise<string> {
   if (direct) return direct;
 
   const ll2Id = getLl2LaunchId(mission);
-  if (!ll2Id) return '';
-
-  const cached = readCache(ll2Id);
+  const cacheId = ll2Id || String(mission?.id || mission?.name || 'unknown');
+  const cached = readCache(cacheId);
   if (cached !== undefined) return cached || '';
+
+  const missionSpaceXPages = findSpaceXPages([
+    mission?.links?.webcast,
+    mission?.links?.wikipedia,
+    mission?.webcast,
+    mission?.infoURLs,
+    mission?.info_urls,
+    mission?.raw,
+    mission?.rawLL2,
+  ]);
+
+  const missionBroadcast = await resolveFromSpaceXPages(missionSpaceXPages);
+  if (missionBroadcast) {
+    writeCache(cacheId, missionBroadcast);
+    return missionBroadcast;
+  }
+
+  if (!ll2Id) {
+    writeCache(cacheId, null);
+    return '';
+  }
 
   const detailUrls = [
     `/api/ll2-launch?id=${encodeURIComponent(ll2Id)}`,
     `https://ll.thespacedevs.com/2.2.0/launch/${encodeURIComponent(ll2Id)}/`,
-    `https://ll.thespacedevs.com/2.3.0/launches/${encodeURIComponent(ll2Id)}/?mode=detailed`,
-    `https://lldev.thespacedevs.com/2.3.0/launches/${encodeURIComponent(ll2Id)}/?mode=detailed`,
+    `https://lldev.thespacedevs.com/2.2.0/launch/${encodeURIComponent(ll2Id)}/`,
   ];
 
   for (const detailUrl of detailUrls) {
     const detail = await fetchJson(detailUrl);
-    const webcast = extractDetailWebcast(detail);
-    if (webcast) {
-      writeCache(ll2Id, webcast);
-      return webcast;
+    if (!detail) continue;
+
+    const detailDirect = detailBroadcast(detail);
+    if (detailDirect) {
+      writeCache(cacheId, detailDirect);
+      return detailDirect;
+    }
+
+    const scrapedBroadcast = await resolveFromSpaceXPages(detailSpaceXPages(detail));
+    if (scrapedBroadcast) {
+      writeCache(cacheId, scrapedBroadcast);
+      return scrapedBroadcast;
     }
   }
 
-  writeCache(ll2Id, null);
+  writeCache(cacheId, null);
   return '';
 }
