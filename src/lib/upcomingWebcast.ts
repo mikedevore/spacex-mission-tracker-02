@@ -1,4 +1,4 @@
-const CACHE_PREFIX = 'spacex-upcoming-webcast-v1:';
+const CACHE_PREFIX = 'spacex-upcoming-webcast-v2:';
 const CACHE_TTL = 30 * 60 * 1000;
 
 const GENERIC_SPACEX_X_PROFILE = /^https?:\/\/(?:www\.)?(?:x|twitter)\.com\/SpaceX\/?(?:\?.*)?$/i;
@@ -124,6 +124,8 @@ function extractDetailWebcast(detail: any): string {
     detail?.vid_urls,
     detail?.video_urls,
     detail?.videos,
+    detail?.infoURLs,
+    detail?.info_urls,
     typeof detail?.webcast_live === 'string' ? detail.webcast_live : '',
   ]);
 
@@ -144,6 +146,7 @@ export async function resolveUpcomingWebcast(mission: any): Promise<string> {
   if (cached !== undefined) return cached || '';
 
   const detailUrls = [
+    `/api/ll2-launch?id=${encodeURIComponent(ll2Id)}`,
     `https://ll.thespacedevs.com/2.2.0/launch/${encodeURIComponent(ll2Id)}/`,
     `https://ll.thespacedevs.com/2.3.0/launches/${encodeURIComponent(ll2Id)}/?mode=detailed`,
     `https://lldev.thespacedevs.com/2.3.0/launches/${encodeURIComponent(ll2Id)}/?mode=detailed`,
@@ -162,8 +165,14 @@ export async function resolveUpcomingWebcast(mission: any): Promise<string> {
   return '';
 }
 
+export function getUpcomingLiveFallback(mission: any): string {
+  const missionName = String(mission?.name || 'SpaceX mission').trim();
+  const query = `from:SpaceX \"${missionName}\" live`;
+  return `https://x.com/search?q=${encodeURIComponent(query)}&src=typed_query&f=live`;
+}
+
 export function upcomingWebcastLabel(url: string): string {
   if (/(?:x|twitter)\.com/i.test(url)) return 'X Live';
-  if (/youtube\.com|youtu\.be/i.test(url)) return 'YouTube';
+  if (/youtube\.com|youtu\.be/i.test(url)) return 'YouTube Live';
   return 'Webcast';
 }
