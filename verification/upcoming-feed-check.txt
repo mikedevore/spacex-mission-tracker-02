@@ -1,0 +1,1 @@
+Temporary verification trigger for Pull Request #4. Remove after the automated preview check completes.
