@@ -11,6 +11,15 @@ interface UpcomingMissionsPanelProps {
   selectMission: (id: string, initial?: boolean) => void;
 }
 
+function buildPlaceholderUrl(mission: any): string {
+  const params = new URLSearchParams({
+    mission: String(mission?.name || 'Upcoming Mission'),
+    date: String(mission?.date_utc || ''),
+  });
+
+  return `/webcast-placeholder.html?${params.toString()}`;
+}
+
 export default function UpcomingMissionsPanel({
   loading,
   filteredUpcoming,
@@ -64,6 +73,7 @@ export default function UpcomingMissionsPanel({
             const missionId = String(mission?.id || '');
             const isSelect = selectedLaunch && selectedLaunch.id === mission.id;
             const confirmedWebcast = getDirectUpcomingWebcast(mission) || resolvedWebcasts[missionId] || '';
+            const webcastUrl = confirmedWebcast || buildPlaceholderUrl(mission);
 
             return (
               <div 
@@ -86,26 +96,16 @@ export default function UpcomingMissionsPanel({
                   </span>
                 </div>
                 <div className="feed-links">
-                  {confirmedWebcast ? (
-                    <a 
-                      className="feed-video-link"
-                      href={confirmedWebcast}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      data-link-type="confirmed-webcast"
-                      onClick={(e) => { e.stopPropagation(); }}
-                    >
-                      Webcast
-                    </a>
-                  ) : (
-                    <span
-                      className="feed-video-link feed-video-missing"
-                      aria-disabled="true"
-                      title="Webcast has not been published yet"
-                    >
-                      Webcast
-                    </span>
-                  )}
+                  <a 
+                    className="feed-video-link"
+                    href={webcastUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    data-link-type={confirmedWebcast ? 'confirmed-webcast' : 'webcast-placeholder'}
+                    onClick={(e) => { e.stopPropagation(); }}
+                  >
+                    Webcast
+                  </a>
                 </div>
               </div>
             );
