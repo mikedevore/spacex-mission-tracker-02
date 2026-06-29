@@ -340,8 +340,8 @@ export default function LowerFeaturesArea({
         {/* Dynamic Vector One Labs© subtler branding footer */}
         <footer className="vector-footer-logo-row pb-8">
           <img 
-            src={`/vector_labs_logo.png?v=${Date.now()}`}
-            alt="Vector One Labs AI Logo" 
+            src={`/vector_one_logo.png?v=${Date.now()}`}
+            alt="Vector One AI Logo" 
             referrerPolicy="no-referrer"
           />
         </footer>
