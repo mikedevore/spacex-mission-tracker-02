@@ -649,14 +649,14 @@ export const SPACEX_HISTORIC_EVENTS = [
 
 export const FALLBACK_UPCOMING = [
   {
-    id: "starship-flight-6",
-    name: "Starship Flight 6",
-    date_utc: "2026-06-18T21:00:00.000Z",
-    details: "Sixth test flight of the combined Starship and Super Heavy vehicle, targeting booster catch at Starbase and orbital stage ocean landing.",
+    id: "starship-flight-7",
+    name: "Starship Flight 7",
+    date_utc: "2026-08-18T21:00:00.000Z",
+    details: "Seventh test flight of the combined Starship and Super Heavy vehicle, targeting booster catch at Starbase and orbital stage ocean landing.",
     rocket_name: "Starship",
     launchpad_name: "Starbase OLP-1",
     upcoming: true,
-    flight_number: 160,
+    flight_number: 162,
     links: {
       patch: { large: "https://images.unsplash.com/photo-1541185933-ef5d8ed016c2?auto=format&fit=crop&q=80&w=400" },
       webcast: "https://www.youtube.com/watch?v=l_g2s8mIWeQ"
@@ -665,12 +665,12 @@ export const FALLBACK_UPCOMING = [
   {
     id: "crew-10",
     name: "Crew-10 (USCV-10)",
-    date_utc: "2026-07-31T09:12:00.000Z",
+    date_utc: "2026-09-31T09:12:00.000Z",
     details: "SpaceX Crew-10 mission is scheduled to launch four crew members to the Area Orbit aboard a Crew Dragon spacecraft.",
     rocket_name: "Falcon 9 Block 5",
     launchpad_name: "LC-39A, Kennedy Space Center",
     upcoming: true,
-    flight_number: 161,
+    flight_number: 163,
     links: {
       patch: { large: "https://images.unsplash.com/photo-1516849841032-87cbac4d88f7?auto=format&fit=crop&q=80&w=400" },
       webcast: "https://www.youtube.com/watch?v=OnoNITE-CLg"

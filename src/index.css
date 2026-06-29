@@ -687,7 +687,7 @@ iframe {
 
 .site-logo {
     margin: 0 auto 6px !important;
-    width: min(300px, 72vw) !important;
+    width: min(600px, 85vw) !important;
   }
 
 h1 {
@@ -1206,8 +1206,8 @@ header.topbar{
   display:block !important;
   visibility:visible !important;
   opacity:1 !important;
-  width:min(470px, 78vw) !important;
-  max-width:470px !important;
+  width:min(600px, 85vw) !important;
+  max-width:600px !important;
   height:auto !important;
   margin:0 auto !important;
   object-fit:contain !important;

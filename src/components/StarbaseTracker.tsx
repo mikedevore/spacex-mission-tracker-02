@@ -10,8 +10,8 @@ export function StarbaseTracker() {
     async function loadData() {
       try {
         const [upRes, pastRes] = await Promise.all([
-          fetch("https://lldev.thespacedevs.com/2.3.0/launches/upcoming/?search=Starship&limit=1&mode=detailed"),
-          fetch("https://lldev.thespacedevs.com/2.3.0/launches/previous/?search=Starship&limit=1&mode=detailed")
+          fetch("/api/proxy?url=" + encodeURIComponent("https://lldev.thespacedevs.com/2.3.0/launches/upcoming/?search=Starship&limit=1&mode=detailed")),
+          fetch("/api/proxy?url=" + encodeURIComponent("https://lldev.thespacedevs.com/2.3.0/launches/previous/?search=Starship&limit=1&mode=detailed"))
         ]);
         const upJson = await upRes.json();
         const pastJson = await pastRes.json();

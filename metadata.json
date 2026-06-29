@@ -1,6 +1,6 @@
 {
-  "name": "SpaceX Launch Tracker",
-  "description": "Real-time SpaceX Launch Updates, Mission History, News & Rocket Details.",
+  "name": "Pristine Workspace",
+  "description": "A clean, pristine workspace template ready for your next custom web application.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
