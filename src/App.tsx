@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Tv, Globe, Twitter, Youtube, Instagram, Camera, Calendar, Cpu, Layers, Info, ExternalLink, AlertTriangle, Anchor, Gauge, FileText, DownloadCloud, Lock, Star, Target, Shield, Rocket } from 'lucide-react';
 import RecentMissionsPanel from './components/RecentMissionsPanel';
 import UpcomingMissionsPanel from './components/UpcomingMissionsPanel';
@@ -18,6 +18,167 @@ import { CACHE_TTL, getCachedData, getStaleCachedData, setCachedData, formatDate
 import { LANDING_VIDEOS, SPACEX_HISTORIC_EVENTS, FALLBACK_UPCOMING, FALLBACK_NEWS } from "./lib/constants";
 import LowerFeaturesArea from "./components/LowerFeaturesArea";
 
+// ─── LL2 Upcoming Missions — production-grade fetch with pagination ───────────
+const LL2_UP_PROD_BASE = "https://ll.thespacedevs.com/2.2.0/launch/upcoming/";
+const LL2_UP_DEV_BASE  = "https://lldev.thespacedevs.com/2.2.0/launch/upcoming/";
+const LL2_UP_PARAMS    = "format=json&limit=100&lsp__name=SpaceX&ordering=net";
+const LL2_UP_PAGES     = 4; // 4 × 100 = up to 400 — covers full SpaceX manifest
+
+function _extractWebcast(launch: any): string {
+  // Priority 1: direct video URL fields (v2.2.0 and v2.3.0 variants)
+  const direct =
+    launch?.vid_urls?.[0]?.url ||
+    launch?.vidURLs?.[0]?.url  ||
+    launch?.video_url          ||
+    launch?.webcast_live       ||
+    "";
+  if (direct) return direct;
+
+  // Priority 2: infoURLs that contain a YouTube or X/Twitter broadcast link
+  const infoList: any[] = launch?.info_urls || launch?.infoURLs || [];
+  for (const entry of infoList) {
+    const u = typeof entry === "string" ? entry : entry?.url || "";
+    if (/youtube\.com|youtu\.be|x\.com\/i\/broadcasts/i.test(u)) return u;
+  }
+  return "";
+}
+
+// Returns the mission-specific SpaceX.com launch page from infoURLs, if present.
+// Used as a button fallback for upcoming missions that have no confirmed live stream yet.
+function _extractSpaceXInfoUrl(launch: any): string {
+  const infoList: any[] = launch?.info_urls || launch?.infoURLs || [];
+  for (const entry of infoList) {
+    const u = typeof entry === "string" ? entry : entry?.url || "";
+    if (/\bspacex\.com\b/i.test(u)) return u;
+  }
+  return "";
+}
+
+function mapLL2Launch(launch: any): any {
+  const image = launch.image?.image_url || launch.image || "";
+  return {
+    id: `ll2-${launch.id}`,
+    name: launch.name || "Upcoming Launch",
+    date_utc: launch.net || launch.window_start,
+    upcoming: true,
+    details: launch.mission?.description || "Upcoming launch schedule data.",
+    rocket_name: launch.rocket?.configuration?.name || "Falcon 9",
+    launchpad_name: launch.pad?.name || "KSC Launch Complex 39A",
+    pad_locality: launch.pad?.location?.name || "Cape Canaveral, FL, USA",
+    links: {
+      patch: { large: image, small: image },
+      webcast: _extractWebcast(launch),
+      spacexInfo: _extractSpaceXInfoUrl(launch),
+      wikipedia: launch.info_urls?.[0]?.url || launch.infoURLs?.[0]?.url || "https://www.spacex.com/"
+    }
+  };
+}
+
+async function fetchAllLL2Upcoming(logFn: (msg: string) => void): Promise<any[]> {
+  const proxy = (url: string) => "/api/proxy?url=" + encodeURIComponent(url);
+
+  const fetchParallelPages = async (base: string): Promise<any[]> => {
+    const pagePromises = Array.from({ length: LL2_UP_PAGES }, async (_, i) => {
+      const offset = i * 100;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 12000);
+      try {
+        const res: Response = await fetch(
+          proxy(`${base}?${LL2_UP_PARAMS}&offset=${offset}`),
+          { signal: controller.signal }
+        );
+        clearTimeout(timer);
+        if (!res.ok) return [] as any[];
+        const data: any = await res.json();
+        return Array.isArray(data.results) ? data.results : [];
+      } catch {
+        clearTimeout(timer);
+        return [] as any[];
+      }
+    });
+    const pages = await Promise.all(pagePromises);
+    return pages.flat();
+  };
+
+  try {
+    logFn("Requesting future manifest from Launch Library 2 (production)…");
+    const results = await fetchParallelPages(LL2_UP_PROD_BASE);
+    if (results.length > 0) return results;
+    throw new Error("Empty result set from production host");
+  } catch (prodErr: any) {
+    logFn(`Production LL2 unavailable (${prodErr.message}). Falling back to dev host…`);
+    return fetchParallelPages(LL2_UP_DEV_BASE);
+  }
+}
+// ─── LL2 Past Missions — production-grade fetch, 3 parallel pages ─────────────
+const LL2_PAST_PROD_BASE  = "https://ll.thespacedevs.com/2.2.0/launch/previous/";
+const LL2_PAST_DEV_BASE   = "https://lldev.thespacedevs.com/2.2.0/launch/previous/";
+const LL2_PAST_PARAMS     = "format=json&limit=100&lsp__name=SpaceX&ordering=-net";
+const LL2_PAST_PAGES      = 8; // 8 × 100 = 800 missions ≈ back to 2017-2018
+
+function mapLL2PastLaunch(launch: any): any {
+  const image = launch.image?.image_url || launch.image || "";
+  return {
+    id: `ll2-${launch.id}`,
+    name: launch.name || "SpaceX Mission",
+    date_utc: launch.net || launch.window_start,
+    upcoming: false,
+    success: launch.status?.id === 3,
+    details: launch.mission?.description || "SpaceX launch campaign flight.",
+    rocket_name: launch.rocket?.configuration?.name || "Falcon 9",
+    launchpad_name: launch.pad?.name || "SLC-40, Cape Canaveral",
+    pad_locality: launch.pad?.location?.name || "Cape Canaveral, FL, USA",
+    has_landing: launch.rocket?.launcher_stage?.some((stage: any) => stage.landing?.attempt) ?? false,
+    links: {
+      patch: { large: image, small: image },
+      webcast: _extractWebcast(launch),
+      wikipedia: launch.info_urls?.[0]?.url || launch.infoURLs?.[0]?.url || "https://www.spacex.com/"
+    }
+  };
+}
+
+async function fetchAllLL2Previous(logFn: (msg: string) => void): Promise<any[]> {
+  const proxy = (url: string) => "/api/proxy?url=" + encodeURIComponent(url);
+
+  const fetchParallelPages = async (base: string): Promise<any[]> => {
+    const pagePromises = Array.from({ length: LL2_PAST_PAGES }, async (_, i) => {
+      const offset = i * 100;
+      // Pages 0-2 use mode=detailed so vidURLs are populated (webcast buttons for 300 recent missions).
+      // Pages 3-7 omit it — lighter payload, just for historical depth.
+      const params = i < 3
+        ? `${LL2_PAST_PARAMS}&mode=detailed`
+        : LL2_PAST_PARAMS;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 45000);
+      try {
+        const res: Response = await fetch(
+          proxy(`${base}?${params}&offset=${offset}`),
+          { signal: controller.signal }
+        );
+        clearTimeout(timer);
+        if (!res.ok) return [] as any[];
+        const data: any = await res.json();
+        return Array.isArray(data.results) ? data.results : [];
+      } catch {
+        clearTimeout(timer);
+        return [] as any[];
+      }
+    });
+    const pages = await Promise.all(pagePromises);
+    return pages.flat();
+  };
+
+  try {
+    logFn("Retrieving live recent flights from Launch Library 2 (production)…");
+    const results = await fetchParallelPages(LL2_PAST_PROD_BASE);
+    if (results.length > 0) return results;
+    throw new Error("Empty result set from production host");
+  } catch (prodErr: any) {
+    logFn(`Production LL2 unavailable (${prodErr.message}). Falling back to dev host…`);
+    return fetchParallelPages(LL2_PAST_DEV_BASE);
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 export default function App() {
   const [view, setView] = useState<'dashboard' | 'pro'>('dashboard');
@@ -25,29 +186,8 @@ export default function App() {
   const [filterVehicle, setFilterVehicle] = useState<string>("all");
   const [filterSuccess, setFilterSuccess] = useState<string>("all");
   const [launches, setLaunches] = useState<any[]>([]);
-  const [selectedRecentLaunch, setSelectedRecentLaunch] = useState<any | null>(null);
-  const [selectedUpcomingLaunch, setSelectedUpcomingLaunch] = useState<any | null>(null);
-  const [activeCenterTab, setActiveCenterTab] = useState<'upcoming' | 'recent'>('upcoming');
-  const [resolvedRecentDetails, setResolvedRecentDetails] = useState<{
-    rocketName?: string;
-    rocketType?: string;
-    padFullName?: string;
-    padLocality?: string;
-    payloadsList?: any[];
-    coresList?: any[];
-    failuresList?: any[];
-    staticFireDate?: string;
-    linksDetails?: {
-      redditCampaign?: string;
-      redditLaunch?: string;
-      redditMedia?: string;
-      redditRecovery?: string;
-      wikipedia?: string;
-      article?: string;
-    };
-    isLoading: boolean;
-  } | null>(null);
-  const [resolvedUpcomingDetails, setResolvedUpcomingDetails] = useState<{
+  const [selectedLaunch, setSelectedLaunch] = useState<any | null>(null);
+  const [resolvedDetails, setResolvedDetails] = useState<{
     rocketName?: string;
     rocketType?: string;
     padFullName?: string;
@@ -74,8 +214,7 @@ export default function App() {
   const [giveawayEntries, setGiveawayEntries] = useState<any[]>([]);
   const [currentWinner, setCurrentWinner] = useState<string>("To Be Announced");
 
-  const [activeRecentVideoId, setActiveRecentVideoId] = useState<string>("");
-  const [activeUpcomingVideoId, setActiveUpcomingVideoId] = useState<string>("");
+  const [activeVideoId, setActiveVideoId] = useState<string>("");
   const [activeLowerReplay, setActiveLowerReplay] = useState<any | null>({
     id: "l_g2s8mIWeQ",
     video_id: "l_g2s8mIWeQ",
@@ -109,12 +248,12 @@ export default function App() {
   });
   
   const upcomingWebcastUrl = useMemo(() => {
-    const targetLaunch = selectedUpcomingLaunch || launches.find(l => l.upcoming);
+    const targetLaunch = (selectedLaunch && selectedLaunch.upcoming) ? selectedLaunch : launches.find(l => l.upcoming);
     if (!targetLaunch) return "https://x.com/SpaceX";
     const youtubeId = targetLaunch.links?.youtube_id;
     const webcastUrl = targetLaunch.links?.webcast || (youtubeId ? `https://www.youtube.com/watch?v=${youtubeId}` : "") || targetLaunch.ll2?.webcast || "";
     return webcastUrl || targetLaunch.links?.wikipedia || "https://x.com/SpaceX";
-  }, [launches, selectedUpcomingLaunch]);
+  }, [launches, selectedLaunch]);
 
   useEffect(() => {
     initAuth(
@@ -177,13 +316,7 @@ export default function App() {
   const selectMission = (id: string, initial = false) => {
     const mission = launches.find(l => l.id === id);
     if (!mission) return;
-    if (mission.upcoming) {
-      setSelectedUpcomingLaunch(mission);
-      setActiveCenterTab('upcoming');
-    } else {
-      setSelectedRecentLaunch(mission);
-      setActiveCenterTab('recent');
-    }
+    setSelectedLaunch(mission);
     if (!initial) {
       addLog(`Selected mission: ${mission.name}`);
     }
@@ -276,60 +409,35 @@ export default function App() {
       let pastMissions: any[] = [];
       let llUpcoming: any[] = [];
       
-      const cachedPast = !forceRefresh ? getCachedData<any[]>("spacex-cache-past-missions-v2") : null;
-      const cachedUpcoming = !forceRefresh ? getCachedData<any[]>("spacex-cache-upcoming-missions") : null;
+      const cachedPast = !forceRefresh ? getCachedData<any[]>("spacex-cache-past-v12") : null;
+      const cachedUpcoming = !forceRefresh ? getCachedData<any[]>("spacex-cache-upcoming-v6") : null;
 
       if (cachedPast && cachedUpcoming) {
         pastMissions = cachedPast;
         llUpcoming = cachedUpcoming;
         addLog("Launches and future manifests loaded from local browser cache.");
       } else {
-        // 1. Fetch live, contemporary past missions from Launch Library 2
+        // 1. Fetch past missions — production LL2, 3 parallel pages, dev fallback, SpaceX V4 last resort
         try {
-          addLog("Retrieving live recent flights from Launch Library 2...");
-          const llPastRes = await fetch("/api/proxy?url=" + encodeURIComponent("https://lldev.thespacedevs.com/2.3.0/launches/previous/?search=SpaceX&limit=30&mode=detailed"));
-          if (llPastRes.ok) {
-            const llPastData = await llPastRes.json();
-            const results = Array.isArray(llPastData.results) ? llPastData.results : [];
-            pastMissions = results.map((launch: any) => {
-              const image = launch.image?.image_url || launch.image || "";
-              return {
-                id: `ll2-${launch.id}`,
-                name: launch.name || "SpaceX Mission",
-                date_utc: launch.net || launch.window_start,
-                upcoming: false,
-                success: launch.status?.id === 3,
-                details: launch.mission?.description || "SpaceX launch campaign flight.",
-                rocket_name: launch.rocket?.configuration?.name || "Falcon 9",
-                launchpad_name: launch.pad?.name || "SLC-40, Cape Canaveral",
-                pad_locality: launch.pad?.location?.name || "Cape Canaveral, FL, USA",
-                has_landing: launch.rocket?.launcher_stage?.some((stage: any) => stage.landing?.attempt) ?? false,
-                links: {
-                  patch: { large: image, small: image },
-                  webcast: launch.vid_urls?.[0]?.url || launch.vidURLs?.[0]?.url || launch.video_url || "",
-                  wikipedia: launch.info_urls?.[0]?.url || launch.infoURLs?.[0]?.url || "https://www.spacex.com/"
-                }
-              };
-            });
-            setCachedData("spacex-cache-past-missions-v2", pastMissions);
-            addLog(`Live synchronized: ${pastMissions.length} contemporary flights acquired.`);
-          } else {
-            throw new Error("HTTP " + llPastRes.status);
-          }
+          const rawPastResults = await fetchAllLL2Previous(addLog);
+          pastMissions = rawPastResults
+            .map(mapLL2PastLaunch)
+            .sort((a: any, b: any) => new Date(b.date_utc).getTime() - new Date(a.date_utc).getTime());
+          setCachedData("spacex-cache-past-v12", pastMissions);
+          addLog(`Live synchronized: ${pastMissions.length} historical flights acquired.`);
         } catch (pastErr: any) {
           addLog(`Contemporary feed offline: ${pastErr.message}. Checking stale browser cache...`);
-          const stalePast = getStaleCachedData<any[]>("spacex-cache-past-missions-v2");
+          const stalePast = getStaleCachedData<any[]>("spacex-cache-past-v12");
           if (stalePast) {
             pastMissions = stalePast;
             addLog("Successfully restored stale recent flights cache.");
           } else {
             addLog("No local cache found. Utilizing legacy SpaceX archive cache...");
             try {
-              const res = await fetch("/api/proxy?url=" + encodeURIComponent("https://api.spacexdata.com/v4/launches"));
+              const res = await fetch("/api/proxy?url=" + encodeURIComponent("https://api.spacexdata.com/v4/launches/past"));
               if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
               const spacexArchive = await res.json();
-              pastMissions = spacexArchive
-                .filter((l: any) => !l.upcoming)
+              pastMissions = (Array.isArray(spacexArchive) ? spacexArchive : [])
                 .map((l: any) => ({
                   ...l,
                   id: `spacex-${l.id}`,
@@ -345,62 +453,37 @@ export default function App() {
           }
         }
 
-        // 2. Attempt to acquire Upcoming launches from Launch Library 2
+        // 2. Acquire Upcoming launches — production LL2 with pagination, dev fallback, SpaceX V4 last resort
         try {
-          addLog("Requesting future manifest from Launch Library 2...");
-          const llRes = await fetch("/api/proxy?url=" + encodeURIComponent("https://lldev.thespacedevs.com/2.3.0/launches/upcoming/?search=SpaceX&limit=12&mode=detailed"));
-          if (llRes.ok) {
-            const llData = await llRes.json();
-            const results = Array.isArray(llData.results) ? llData.results : [];
-            const now = Date.now();
-            llUpcoming = results
-              .filter((launch: any) => {
-                const launchTime = new Date(launch.net || launch.window_start).getTime();
-                return launchTime > now; // Only keep truly future launches
-              })
-              .map((launch: any) => {
-                const image = launch.image?.image_url || launch.image || "";
-                return {
-                  id: `ll2-${launch.id}`,
-                  name: launch.name || "Upcoming Launch",
-                  date_utc: launch.net || launch.window_start,
-                  upcoming: true,
-                  details: launch.mission?.description || "Upcoming launch schedule data.",
-                  rocket_name: launch.rocket?.configuration?.name || "Falcon 9",
-                  launchpad_name: launch.pad?.name || "KSC Launch Complex 39A",
-                  pad_locality: launch.pad?.location?.name || "Cape Canaveral, FL, USA",
-                  links: {
-                    patch: { large: image, small: image },
-                    webcast: launch.vid_urls?.[0]?.url || launch.vidURLs?.[0]?.url || launch.video_url || "",
-                    wikipedia: launch.info_urls?.[0]?.url || launch.infoURLs?.[0]?.url || "https://www.spacex.com/"
-                  }
-                };
-              });
+          const rawResults = await fetchAllLL2Upcoming(addLog);
+          const now = Date.now();
+          llUpcoming = rawResults
+            .filter((launch: any) => {
+              const t = new Date(launch.net || launch.window_start).getTime();
+              return !isNaN(t) && t > now;
+            })
+            .map(mapLL2Launch)
+            .sort((a: any, b: any) => new Date(a.date_utc).getTime() - new Date(b.date_utc).getTime());
 
-            if (llUpcoming.length === 0) {
-              throw new Error("Empty upcoming flights from LL2");
-            }
+          if (llUpcoming.length === 0) throw new Error("LL2 returned no future SpaceX launches");
 
-            setCachedData("spacex-cache-upcoming-missions", llUpcoming);
-            addLog(`Retrieved ${llUpcoming.length} future missions from Launch Library 2.`);
-          } else {
-            throw new Error("LL2 response not ok");
-          }
+          setCachedData("spacex-cache-upcoming-v6", llUpcoming);
+          addLog(`Retrieved ${llUpcoming.length} future missions from Launch Library 2.`);
         } catch (err: any) {
           addLog(`Future manifest offline: ${err.message}. Checking stale browser cache...`);
-          const staleUpcoming = getStaleCachedData<any[]>("spacex-cache-upcoming-missions");
+          const staleUpcoming = getStaleCachedData<any[]>("spacex-cache-upcoming-v6");
           if (staleUpcoming) {
             llUpcoming = staleUpcoming;
             addLog("Successfully restored stale future manifest cache.");
           } else {
-            addLog("LL2 offline. Attempting backup sync via live SpaceX V4 upcoming API flight list...");
+            addLog("LL2 offline. Attempting backup sync via SpaceX V4 API...");
             try {
-              const res = await fetch("/api/proxy?url=" + encodeURIComponent("https://api.spacexdata.com/v4/launches"));
+              const res = await fetch("/api/proxy?url=" + encodeURIComponent("https://api.spacexdata.com/v4/launches/upcoming"));
               if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
               const spacexArchive = await res.json();
               const now = Date.now();
-              llUpcoming = spacexArchive
-                .filter((l: any) => l.upcoming && new Date(l.date_utc || l.date_local).getTime() > now)
+              llUpcoming = (Array.isArray(spacexArchive) ? spacexArchive : [])
+                .filter((l: any) => new Date(l.date_utc || l.date_local).getTime() > now)
                 .map((l: any) => {
                   const image = l.links?.patch?.large || l.links?.patch?.small || "https://images.unsplash.com/photo-1541185933-ef5d8ed016c2?auto=format&fit=crop&q=80&w=400";
                   return {
@@ -421,14 +504,14 @@ export default function App() {
                   };
                 })
                 .sort((a: any, b: any) => new Date(a.date_utc).getTime() - new Date(b.date_utc).getTime());
-              
+
               if (llUpcoming.length === 0) {
-                addLog('SpaceX V4 fallback yielded 0 upcoming. Utilizing local backup calendar.');
+                addLog("SpaceX V4 fallback yielded 0 upcoming. Utilizing local backup calendar.");
                 llUpcoming = FALLBACK_UPCOMING;
               }
 
-              setCachedData("spacex-cache-upcoming-missions", llUpcoming);
-              addLog(`Successfully parsed ${llUpcoming.length} real-time upcoming launches from SpaceX API.`);
+              setCachedData("spacex-cache-upcoming-v6", llUpcoming);
+              addLog(`Successfully parsed ${llUpcoming.length} upcoming launches from SpaceX API.`);
             } catch (subErr: any) {
               addLog(`SpaceX V4 fallback failed: ${subErr.message}. Utilizing local backup calendar.`, true);
               llUpcoming = FALLBACK_UPCOMING;
@@ -441,12 +524,10 @@ export default function App() {
       const allMissions = pastMissions.concat(llUpcoming);
       setLaunches(allMissions);
 
-      // Set initial selected launches independently
-      if (llUpcoming.length > 0) {
-        setSelectedUpcomingLaunch(llUpcoming[0]);
-      }
-      if (pastMissions.length > 0) {
-        setSelectedRecentLaunch(pastMissions[0]);
+      // Set initial selected launch to first upcoming if exists, else first historical
+      const initial = llUpcoming[0] || pastMissions[0];
+      if (initial) {
+        setSelectedLaunch(initial);
       }
     } catch (err: any) {
       addLog(`API fetch failure: ${err.message}`, true);
@@ -478,87 +559,26 @@ export default function App() {
     const pollTimer = setInterval(async () => {
       fetchNews(true);
       try {
-        const llRes = await fetch("/api/proxy?url=" + encodeURIComponent("https://lldev.thespacedevs.com/2.3.0/launches/upcoming/?search=SpaceX&limit=12&mode=detailed"));
-        if (llRes.ok) {
-          const llData = await llRes.json();
-          const results = Array.isArray(llData.results) ? llData.results : [];
-          const now = Date.now();
-          const llUpcoming = results
-            .filter((launch: any) => new Date(launch.net || launch.window_start).getTime() > now)
-            .map((launch: any) => {
-              const image = launch.image?.image_url || launch.image || "";
-              return {
-                id: `ll2-${launch.id}`,
-                name: launch.name || "Upcoming Launch",
-                date_utc: launch.net || launch.window_start,
-                upcoming: true,
-                details: launch.mission?.description || "Upcoming launch schedule data.",
-                rocket_name: launch.rocket?.configuration?.name || "Falcon 9",
-                launchpad_name: launch.pad?.name || "KSC Launch Complex 39A",
-                pad_locality: launch.pad?.location?.name || "Cape Canaveral, FL, USA",
-                links: {
-                  patch: { large: image, small: image },
-                  webcast: launch.vid_urls?.[0]?.url || launch.vidURLs?.[0]?.url || launch.video_url || "",
-                  wikipedia: launch.info_urls?.[0]?.url || launch.infoURLs?.[0]?.url || "https://www.spacex.com/"
-                }
-              };
-            });
+        const rawResults = await fetchAllLL2Upcoming(addLog);
+        const now = Date.now();
+        const llUpcoming = rawResults
+          .filter((launch: any) => {
+            const t = new Date(launch.net || launch.window_start).getTime();
+            return !isNaN(t) && t > now;
+          })
+          .map(mapLL2Launch)
+          .sort((a: any, b: any) => new Date(a.date_utc).getTime() - new Date(b.date_utc).getTime());
 
-          if (llUpcoming.length === 0) {
-            throw new Error("Empty upcoming flights from LL2 polling");
-          }
+        if (llUpcoming.length === 0) throw new Error("LL2 polling returned no future SpaceX launches");
 
-          setLaunches(prev => {
-            const past = prev.filter(l => !l.upcoming);
-            return past.concat(llUpcoming);
-          });
-          setCachedData("spacex-cache-upcoming-missions", llUpcoming);
-          addLog("Live feed sync: Upcoming missions updated.");
-        } else {
-          throw new Error("Polling response status " + llRes.status);
-        }
+        setLaunches((prev: any[]) => {
+          const past = prev.filter((l: any) => !l.upcoming);
+          return past.concat(llUpcoming);
+        });
+        setCachedData("spacex-cache-upcoming-v6", llUpcoming);
+        addLog(`Live feed sync: ${llUpcoming.length} upcoming missions updated.`);
       } catch (e: any) {
-        // Fallback sync with SpaceX API
-        try {
-          const res = await fetch("/api/proxy?url=" + encodeURIComponent("https://api.spacexdata.com/v4/launches"));
-          if (res.ok) {
-            const spacexArchive = await res.json();
-            const now = Date.now();
-            let llUpcoming = spacexArchive
-              .filter((l: any) => l.upcoming && new Date(l.date_utc || l.date_local).getTime() > now)
-              .map((l: any) => {
-                const image = l.links?.patch?.large || l.links?.patch?.small || "https://images.unsplash.com/photo-1541185933-ef5d8ed016c2?auto=format&fit=crop&q=80&w=400";
-                return {
-                  ...l,
-                  id: `spacex-${l.id}`,
-                  name: l.name || "SpaceX Upcoming Mission",
-                  date_utc: l.date_utc,
-                  upcoming: true,
-                  details: l.details || "Upcoming SpaceX flight manifest schedule data.",
-                  rocket_name: "Falcon 9",
-                  launchpad_name: "Kennedy Space Center / SLC-40",
-                  pad_locality: "Cape Canaveral / Vandenberg, USA",
-                  links: {
-                    patch: { large: image, small: image },
-                    webcast: l.links?.webcast || (l.links?.youtube_id ? `https://www.youtube.com/watch?v=${l.links.youtube_id}` : ""),
-                    wikipedia: l.links?.wikipedia || "https://www.spacex.com/"
-                  }
-                };
-              })
-              .sort((a: any, b: any) => new Date(a.date_utc).getTime() - new Date(b.date_utc).getTime());
-            
-            if (llUpcoming.length === 0) {
-              llUpcoming = FALLBACK_UPCOMING;
-            }
-
-            setLaunches(prev => {
-              const past = prev.filter(l => !l.upcoming);
-              return past.concat(llUpcoming);
-            });
-            setCachedData("spacex-cache-upcoming-missions", llUpcoming);
-            addLog("Live feed sync: Recouped upcoming launches from SpaceX API after rate limits.");
-          }
-        } catch (_) {}
+        addLog(`Live feed sync: LL2 unavailable (${e.message}). Retaining current manifest.`);
       }
     }, 5 * 60 * 1000);
 
@@ -579,7 +599,7 @@ export default function App() {
       const diff = targetTime - now;
 
       if (diff <= 0) {
-        const text = "GO LIVE";
+        const text = selectedLaunch.upcoming ? "GO LIVE" : "MISSION ARCHIVE";
         setCountdownText(text);
         setTimeLeft({
           days: 0,
@@ -615,22 +635,22 @@ export default function App() {
     const interval = setInterval(updateTimer, 1000);
 
     return () => clearInterval(interval);
-  }, [selectedUpcomingLaunch]);
+  }, [selectedLaunch]);
 
-  // Telemetry Deep-Resolver for Selected Recent Launch
+  // Telemetry Deep-Resolver for Selected Launch
   useEffect(() => {
-    if (!selectedRecentLaunch) {
-      setResolvedRecentDetails(null);
+    if (!selectedLaunch) {
+      setResolvedDetails(null);
       return;
     }
 
     // If it is Launch Library 2 or a local fallback, instantly resolve basic fields
-    if (selectedRecentLaunch.id?.toString().startsWith('ll2-') || !selectedRecentLaunch.id) {
-      setResolvedRecentDetails({
-        rocketName: selectedRecentLaunch.rocket_name || "Falcon 9",
-        padFullName: selectedRecentLaunch.launchpad_name || "SLC-40, Cape Canaveral",
+    if (selectedLaunch.id?.toString().startsWith('ll2-') || !selectedLaunch.id) {
+      setResolvedDetails({
+        rocketName: selectedLaunch.rocket_name || "Falcon 9",
+        padFullName: selectedLaunch.launchpad_name || "SLC-40, Cape Canaveral",
         linksDetails: {
-          article: selectedRecentLaunch.links?.webcast || undefined
+          article: selectedLaunch.links?.webcast || undefined
         },
         isLoading: false,
       });
@@ -638,17 +658,17 @@ export default function App() {
     }
 
     let isCancelled = false;
-    setResolvedRecentDetails({ isLoading: true });
-    addLog(`Initiating advanced telemetry lookup for Recent "${selectedRecentLaunch.name}"...`);
+    setResolvedDetails({ isLoading: true });
+    addLog(`Initiating advanced telemetry lookup for "${selectedLaunch.name}"...`);
 
     const fetchExpandedInfo = async () => {
       try {
         // 1. Fetch Rocket Info
         let rocketName = "Falcon 9";
         let rocketType = "Falcon 9";
-        if (selectedRecentLaunch.rocket) {
+        if (selectedLaunch.rocket) {
           try {
-            const rRes = await fetch(`/api/proxy?url=${encodeURIComponent(`https://api.spacexdata.com/v4/rockets/${selectedRecentLaunch.rocket}`)}`);
+            const rRes = await fetch(`/api/proxy?url=${encodeURIComponent(`https://api.spacexdata.com/v4/rockets/${selectedLaunch.rocket}`)}`);
             if (rRes.ok) {
               const rData = await rRes.json();
               rocketName = rData.name || rocketName;
@@ -662,9 +682,9 @@ export default function App() {
         // 2. Fetch Launchpad Info
         let padFullName = "SLC-40, Cape Canaveral";
         let padLocality = "Florida";
-        if (selectedRecentLaunch.launchpad) {
+        if (selectedLaunch.launchpad) {
           try {
-            const pRes = await fetch(`/api/proxy?url=${encodeURIComponent(`https://api.spacexdata.com/v4/launchpads/${selectedRecentLaunch.launchpad}`)}`);
+            const pRes = await fetch(`/api/proxy?url=${encodeURIComponent(`https://api.spacexdata.com/v4/launchpads/${selectedLaunch.launchpad}`)}`);
             if (pRes.ok) {
               const pData = await pRes.json();
               padFullName = pData.full_name || pData.name || padFullName;
@@ -677,9 +697,10 @@ export default function App() {
 
         // 3. Fetch Payloads Info
         let payloadsList: any[] = [];
-        if (Array.isArray(selectedRecentLaunch.payloads) && selectedRecentLaunch.payloads.length > 0) {
+        if (Array.isArray(selectedLaunch.payloads) && selectedLaunch.payloads.length > 0) {
           try {
-            const targets = selectedRecentLaunch.payloads.slice(0, 3);
+            // Fetch first 3 payloads in parallel to display specific weights, customers, orbits
+            const targets = selectedLaunch.payloads.slice(0, 3);
             const pPromises = targets.map(async (pId: string) => {
               const pRes = await fetch(`/api/proxy?url=${encodeURIComponent(`https://api.spacexdata.com/v4/payloads/${pId}`)}`);
               return pRes.ok ? pRes.json() : null;
@@ -693,9 +714,9 @@ export default function App() {
 
         // 4. Fetch Cores & Landpads
         let coresList: any[] = [];
-        if (Array.isArray(selectedRecentLaunch.cores) && selectedRecentLaunch.cores.length > 0) {
+        if (Array.isArray(selectedLaunch.cores) && selectedLaunch.cores.length > 0) {
           try {
-            const cPromises = selectedRecentLaunch.cores.map(async (c: any) => {
+            const cPromises = selectedLaunch.cores.map(async (c: any) => {
               let coreData: any = null;
               let landpadData: any = null;
 
@@ -726,40 +747,40 @@ export default function App() {
         if (isCancelled) return;
 
         // 5. Build full state
-        const staticFireDate = selectedRecentLaunch.static_fire_date_utc 
-          ? new Date(selectedRecentLaunch.static_fire_date_utc).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })
+        const staticFireDate = selectedLaunch.static_fire_date_utc 
+          ? new Date(selectedLaunch.static_fire_date_utc).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })
           : undefined;
 
         const linksDetails = {
-          redditCampaign: selectedRecentLaunch.links?.reddit?.campaign || undefined,
-          redditLaunch: selectedRecentLaunch.links?.reddit?.launch || undefined,
-          redditMedia: selectedRecentLaunch.links?.reddit?.media || undefined,
-          redditRecovery: selectedRecentLaunch.links?.reddit?.recovery || undefined,
-          wikipedia: selectedRecentLaunch.links?.wikipedia || undefined,
-          article: selectedRecentLaunch.links?.article || undefined,
+          redditCampaign: selectedLaunch.links?.reddit?.campaign || undefined,
+          redditLaunch: selectedLaunch.links?.reddit?.launch || undefined,
+          redditMedia: selectedLaunch.links?.reddit?.media || undefined,
+          redditRecovery: selectedLaunch.links?.reddit?.recovery || undefined,
+          wikipedia: selectedLaunch.links?.wikipedia || undefined,
+          article: selectedLaunch.links?.article || undefined,
         };
 
         if (!isCancelled) {
-          setResolvedRecentDetails({
+          setResolvedDetails({
             rocketName,
             rocketType,
             padFullName,
             padLocality,
             payloadsList,
             coresList,
-            failuresList: selectedRecentLaunch.failures || [],
+            failuresList: selectedLaunch.failures || [],
             staticFireDate,
             linksDetails,
             isLoading: false
           });
-          addLog(`Advanced telemetry acquired for Recent "${selectedRecentLaunch.name}".`);
+          addLog(`Advanced telemetry acquired for "${selectedLaunch.name}".`);
         }
       } catch (err: any) {
         addLog(`Deep resolver error: ${err.message}`, true);
         if (!isCancelled) {
-          setResolvedRecentDetails({
-            rocketName: selectedRecentLaunch.rocket_name || "Falcon 9",
-            padFullName: selectedRecentLaunch.launchpad_name || "SLC-40, Cape Canaveral",
+          setResolvedDetails({
+            rocketName: selectedLaunch.rocket_name || "Falcon 9",
+            padFullName: selectedLaunch.launchpad_name || "SLC-40, Cape Canaveral",
             isLoading: false
           });
         }
@@ -771,190 +792,54 @@ export default function App() {
     return () => {
       isCancelled = true;
     };
-  }, [selectedRecentLaunch]);
+  }, [selectedLaunch]);
 
-  // Telemetry Deep-Resolver for Selected Upcoming Launch
+  // Synchronize active video and lower replay panel when selectedLaunch changes
   useEffect(() => {
-    if (!selectedUpcomingLaunch) {
-      setResolvedUpcomingDetails(null);
-      return;
-    }
+    if (selectedLaunch) {
+      const ytId = extractYoutubeId(youtubeUrl(selectedLaunch));
+      setActiveVideoId(ytId);
 
-    // If it is Launch Library 2 or a local fallback, instantly resolve basic fields
-    if (selectedUpcomingLaunch.id?.toString().startsWith('ll2-') || !selectedUpcomingLaunch.id) {
-      setResolvedUpcomingDetails({
-        rocketName: selectedUpcomingLaunch.rocket_name || "Falcon 9",
-        padFullName: selectedUpcomingLaunch.launchpad_name || "SLC-40, Cape Canaveral",
-        linksDetails: {
-          article: selectedUpcomingLaunch.links?.webcast || undefined
-        },
-        isLoading: false,
+      // If the selected launch is a dynamic landing replay, do not overwrite the customized landing timeline panel
+      const isLanding = LANDING_VIDEOS.some(v => v.id === selectedLaunch.id);
+      if (isLanding) {
+        return;
+      }
+
+      // Automatically sync the main "MISSION DISPLAY" to show the selected launch details & webcast
+      setActiveLowerReplay({
+        id: ytId,
+        video_id: ytId,
+        title: selectedLaunch.name,
+        type: selectedLaunch.upcoming ? 'upcoming' : 'historic',
+        vehicle: selectedLaunch.rocket_name || selectedLaunch.rocket?.name || "Falcon 9",
+        booster: selectedLaunch.cores?.[0]?.core?.serial || selectedLaunch.cores?.[0]?.core || "N/A",
+        pad: selectedLaunch.launchpad_name || selectedLaunch.pad_locality || selectedLaunch.pad || "Cape Canaveral, FL",
+        details: selectedLaunch.details || "Launch operations and telemetry parameters.",
+        launchpad: selectedLaunch.launchpad_name || selectedLaunch.pad_locality || selectedLaunch.pad || "Cape Canaveral, FL"
       });
-      return;
     }
-
-    let isCancelled = false;
-    setResolvedUpcomingDetails({ isLoading: true });
-    addLog(`Initiating advanced telemetry lookup for Upcoming "${selectedUpcomingLaunch.name}"...`);
-
-    const fetchExpandedInfo = async () => {
-      try {
-        // 1. Fetch Rocket Info
-        let rocketName = "Falcon 9";
-        let rocketType = "Falcon 9";
-        if (selectedUpcomingLaunch.rocket) {
-          try {
-            const rRes = await fetch(`/api/proxy?url=${encodeURIComponent(`https://api.spacexdata.com/v4/rockets/${selectedUpcomingLaunch.rocket}`)}`);
-            if (rRes.ok) {
-              const rData = await rRes.json();
-              rocketName = rData.name || rocketName;
-              rocketType = rData.type || rocketType;
-            }
-          } catch (_) {}
-        }
-
-        if (isCancelled) return;
-
-        // 2. Fetch Launchpad Info
-        let padFullName = "SLC-40, Cape Canaveral";
-        let padLocality = "Florida";
-        if (selectedUpcomingLaunch.launchpad) {
-          try {
-            const pRes = await fetch(`/api/proxy?url=${encodeURIComponent(`https://api.spacexdata.com/v4/launchpads/${selectedUpcomingLaunch.launchpad}`)}`);
-            if (pRes.ok) {
-              const pData = await pRes.json();
-              padFullName = pData.full_name || pData.name || padFullName;
-              padLocality = pData.locality ? `${pData.locality}, ${pData.region}` : padLocality;
-            }
-          } catch (_) {}
-        }
-
-        if (isCancelled) return;
-
-        // 3. Fetch Payloads Info
-        let payloadsList: any[] = [];
-        if (Array.isArray(selectedUpcomingLaunch.payloads) && selectedUpcomingLaunch.payloads.length > 0) {
-          try {
-            const targets = selectedUpcomingLaunch.payloads.slice(0, 3);
-            const pPromises = targets.map(async (pId: string) => {
-              const pRes = await fetch(`/api/proxy?url=${encodeURIComponent(`https://api.spacexdata.com/v4/payloads/${pId}`)}`);
-              return pRes.ok ? pRes.json() : null;
-            });
-            const pResults = await Promise.all(pPromises);
-            payloadsList = pResults.filter(Boolean);
-          } catch (_) {}
-        }
-
-        if (isCancelled) return;
-
-        // 4. Fetch Cores & Landpads
-        let coresList: any[] = [];
-        if (Array.isArray(selectedUpcomingLaunch.cores) && selectedUpcomingLaunch.cores.length > 0) {
-          try {
-            const cPromises = selectedUpcomingLaunch.cores.map(async (c: any) => {
-              let coreData: any = null;
-              let landpadData: any = null;
-
-              if (c.core) {
-                try {
-                  const cRes = await fetch(`/api/proxy?url=${encodeURIComponent(`https://api.spacexdata.com/v4/cores/${c.core}`)}`);
-                  if (cRes.ok) coreData = await cRes.json();
-                } catch (_) {}
-              }
-
-              if (c.landpad) {
-                try {
-                  const lpRes = await fetch(`/api/proxy?url=${encodeURIComponent(`https://api.spacexdata.com/v4/landpads/${c.landpad}`)}`);
-                  if (lpRes.ok) landpadData = await lpRes.json();
-                } catch (_) {}
-              }
-
-              return {
-                ...c,
-                coreDetails: coreData,
-                landDetails: landpadData
-              };
-            });
-            coresList = await Promise.all(cPromises);
-          } catch (_) {}
-        }
-
-        if (isCancelled) return;
-
-        // 5. Build full state
-        const staticFireDate = selectedUpcomingLaunch.static_fire_date_utc 
-          ? new Date(selectedUpcomingLaunch.static_fire_date_utc).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })
-          : undefined;
-
-        const linksDetails = {
-          redditCampaign: selectedUpcomingLaunch.links?.reddit?.campaign || undefined,
-          redditLaunch: selectedUpcomingLaunch.links?.reddit?.launch || undefined,
-          redditMedia: selectedUpcomingLaunch.links?.reddit?.media || undefined,
-          redditRecovery: selectedUpcomingLaunch.links?.reddit?.recovery || undefined,
-          wikipedia: selectedUpcomingLaunch.links?.wikipedia || undefined,
-          article: selectedUpcomingLaunch.links?.article || undefined,
-        };
-
-        if (!isCancelled) {
-          setResolvedUpcomingDetails({
-            rocketName,
-            rocketType,
-            padFullName,
-            padLocality,
-            payloadsList,
-            coresList,
-            failuresList: selectedUpcomingLaunch.failures || [],
-            staticFireDate,
-            linksDetails,
-            isLoading: false
-          });
-          addLog(`Advanced telemetry acquired for Upcoming "${selectedUpcomingLaunch.name}".`);
-        }
-      } catch (err: any) {
-        addLog(`Deep resolver error: ${err.message}`, true);
-        if (!isCancelled) {
-          setResolvedUpcomingDetails({
-            rocketName: selectedUpcomingLaunch.rocket_name || "Falcon 9",
-            padFullName: selectedUpcomingLaunch.launchpad_name || "SLC-40, Cape Canaveral",
-            isLoading: false
-          });
-        }
-      }
-    };
-
-    fetchExpandedInfo();
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [selectedUpcomingLaunch]);
-
-  // Synchronize active video when selectedRecentLaunch changes
-  useEffect(() => {
-    if (selectedRecentLaunch) {
-      const ytId = extractYoutubeId(youtubeUrl(selectedRecentLaunch));
-      setActiveRecentVideoId(ytId);
-    }
-  }, [selectedRecentLaunch]);
-
-  // Synchronize active video when selectedUpcomingLaunch changes
-  useEffect(() => {
-    if (selectedUpcomingLaunch) {
-      const ytId = extractYoutubeId(youtubeUrl(selectedUpcomingLaunch));
-      setActiveUpcomingVideoId(ytId);
-    }
-  }, [selectedUpcomingLaunch]);
+  }, [selectedLaunch]);
 
   const playLandingVideo = (video: any) => {
+    setActiveVideoId(video.id);
+    setSelectedLaunch({
+      id: video.id,
+      name: video.title,
+      upcoming: false,
+      date_utc: null,
+      details: `Historical Archive Replay: ${video.title}. Displaying stored dynamic landing stream parameters and telemetry matrix.`,
+      rocket_name: video.type,
+      launchpad_name: "Archive Footage",
+      links: {
+        webcast: `https://www.youtube.com/watch?v=${video.id}`
+      }
+    });
     setActiveLowerReplay({ ...video, type: 'landing' });
     addLog(`Loading landing replay webcast: ${video.title}`);
   };
 
   // Render variables & helpers
-  const selectedLaunch = activeCenterTab === 'upcoming' ? selectedUpcomingLaunch : selectedRecentLaunch;
-  const resolvedDetails = activeCenterTab === 'upcoming' ? resolvedUpcomingDetails : resolvedRecentDetails;
-  const activeVideoId = activeCenterTab === 'upcoming' ? activeUpcomingVideoId : activeRecentVideoId;
-
   const currentLandingVideoData = useMemo(() => {
     return LANDING_VIDEOS.find(v => v.id === activeVideoId);
   }, [activeVideoId]);
@@ -968,12 +853,137 @@ export default function App() {
   }, [launches]);
 
   const filteredPast = useMemo(() => {
-    return pastLaunchesList.slice(0, 30);
+    return [...pastLaunchesList].sort(
+      (a, b) => new Date(b.date_utc).getTime() - new Date(a.date_utc).getTime()
+    );
   }, [pastLaunchesList]);
 
   const filteredUpcoming = useMemo(() => {
-    return upcomingLaunchesList;
+    return [...upcomingLaunchesList].sort(
+      (a, b) => new Date(a.date_utc).getTime() - new Date(b.date_utc).getTime()
+    );
   }, [upcomingLaunchesList]);
+
+  // Async-resolve exact X broadcast URLs for the first 5 upcoming missions.
+  // Mirrors reference project's _resolveWebcastUrl flow:
+  //   1. LL2 single-launch endpoint (dev host) → vidURLs (populated even when bulk list is empty)
+  //   2. infoURLs from that detail → spacex.com page scrape → x.com/i/broadcasts/XXXXX
+  //   3. spacexInfo from bulk list as last resort
+  const _resolvedBroadcastIds = useRef<Set<string>>(new Set());
+  const _upcomingIdsKey = upcomingLaunchesList.map(m => m.id).join(',');
+  useEffect(() => {
+    const toResolve = upcomingLaunchesList
+      .slice(0, 5)
+      .filter(m =>
+        m.id?.startsWith('ll2-') &&
+        !m.links?.webcast &&
+        !_resolvedBroadcastIds.current.has(m.id)
+      );
+    if (toResolve.length === 0) return;
+
+    let cancelled = false;
+    toResolve.forEach(m => _resolvedBroadcastIds.current.add(m.id));
+
+    const resolveOne = async (mission: any) => {
+      const ll2Id = mission.id.replace('ll2-', '');
+      // Step 1: LL2 single-launch detail gives vidURLs (bulk list omits them).
+      try {
+        const r = await fetch(
+          `/api/proxy?url=${encodeURIComponent(`https://lldev.thespacedevs.com/2.2.0/launch/${ll2Id}/`)}`
+        );
+        if (r.ok && !cancelled) {
+          const detail: any = await r.json();
+          const broadcastUrl =
+            detail?.vidURLs?.[0]?.url || detail?.vid_urls?.[0]?.url || "";
+          if (broadcastUrl && !cancelled) {
+            setLaunches(prev => prev.map(l =>
+              l.id === mission.id ? { ...l, links: { ...l.links, webcast: broadcastUrl } } : l
+            ));
+            return;
+          }
+          // Step 2: infoURLs from single-launch → scrape spacex.com for broadcast URL
+          const infoList: any[] = detail?.infoURLs || detail?.info_urls || [];
+          for (const entry of infoList) {
+            if (cancelled) return;
+            const u = typeof entry === "string" ? entry : entry?.url || "";
+            if (/\bspacex\.com\b/i.test(u)) {
+              const wr = await fetch(`/api/spacex-webcast?url=${encodeURIComponent(u)}`);
+              if (wr.ok && !cancelled) {
+                const wd: any = await wr.json();
+                if (wd.broadcastUrl && !cancelled) {
+                  setLaunches(prev => prev.map(l =>
+                    l.id === mission.id ? { ...l, links: { ...l.links, webcast: wd.broadcastUrl } } : l
+                  ));
+                  return;
+                }
+              }
+            }
+          }
+        }
+      } catch (_) {}
+
+      // Step 3: spacexInfo from bulk list (last resort)
+      if (mission.links?.spacexInfo && !cancelled) {
+        try {
+          const wr = await fetch(
+            `/api/spacex-webcast?url=${encodeURIComponent(mission.links.spacexInfo)}`
+          );
+          if (wr.ok && !cancelled) {
+            const wd: any = await wr.json();
+            if (wd.broadcastUrl && !cancelled) {
+              setLaunches(prev => prev.map(l =>
+                l.id === mission.id ? { ...l, links: { ...l.links, webcast: wd.broadcastUrl } } : l
+              ));
+            }
+          }
+        } catch (_) {}
+      }
+    };
+
+    Promise.all(toResolve.map(resolveOne));
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [_upcomingIdsKey]);
+
+  // Resolve webcast URLs for the 30 most-recent past missions.
+  // Without mode=detailed, vidURLs is absent from the list — use single-launch endpoint.
+  const _resolvedPastBroadcastIds = useRef<Set<string>>(new Set());
+  const _pastIdsKey = pastLaunchesList.slice(0, 30).map(m => m.id).join(',');
+  useEffect(() => {
+    const toResolve = pastLaunchesList
+      .slice(0, 30)
+      .filter(m =>
+        m.id?.startsWith('ll2-') &&
+        !m.links?.webcast &&
+        !_resolvedPastBroadcastIds.current.has(m.id)
+      );
+    if (toResolve.length === 0) return;
+    toResolve.forEach(m => _resolvedPastBroadcastIds.current.add(m.id));
+
+    const resolvePastOne = async (mission: any) => {
+      const ll2Id = mission.id.replace('ll2-', '');
+      try {
+        const r = await fetch(
+          `/api/proxy?url=${encodeURIComponent(`https://lldev.thespacedevs.com/2.2.0/launch/${ll2Id}/`)}`
+        );
+        if (r.ok) {
+          const detail: any = await r.json();
+          const webcastUrl =
+            detail?.vidURLs?.[0]?.url ||
+            detail?.vid_urls?.[0]?.url ||
+            "";
+          if (webcastUrl) {
+            setLaunches(prev => prev.map(l =>
+              l.id === mission.id ? { ...l, links: { ...l.links, webcast: webcastUrl } } : l
+            ));
+          }
+        }
+      } catch (_) {}
+    };
+
+    Promise.all(toResolve.map(resolvePastOne));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [_pastIdsKey]);
 
   const isCloseToLaunch = useMemo(() => {
     if (timeLeft.isPast || timeLeft.isTbd) return false;
@@ -1097,7 +1107,7 @@ export default function App() {
             </div>
 
             <div id="nextName" className="mt-1 px-2 text-[10px] md:text-[11px] tracking-[0.15em] text-[#ff7a18] text-center font-bold font-space uppercase break-words max-w-full">
-              {selectedUpcomingLaunch ? selectedUpcomingLaunch.name : "Syncing Mission State"}
+              {selectedLaunch ? selectedLaunch.name : "Syncing Mission State"}
             </div>
           </div>
 
@@ -1118,7 +1128,7 @@ export default function App() {
           <RecentMissionsPanel 
             loading={loading}
             filteredPast={filteredPast}
-            selectedLaunch={selectedRecentLaunch}
+            selectedLaunch={selectedLaunch}
             selectMission={selectMission}
           />
 
@@ -1147,8 +1157,6 @@ export default function App() {
                 </a>
               </div>
             </div>
-
-
 
             {selectedLaunch ? (
               <div id="displayArea" className="space-y-4">
@@ -1537,7 +1545,7 @@ export default function App() {
           <UpcomingMissionsPanel 
             loading={loading}
             filteredUpcoming={filteredUpcoming}
-            selectedLaunch={selectedUpcomingLaunch}
+            selectedLaunch={selectedLaunch}
             selectMission={selectMission}
           />
 
@@ -1654,7 +1662,7 @@ export default function App() {
                   }
                   return true;
                 }).map((video) => {
-                  const isLandingActive = activeLowerReplay?.id === video.id || activeLowerReplay?.video_id === video.id;
+                  const isLandingActive = activeVideoId === video.id || activeLowerReplay?.id === video.id;
                   return (
                     <div
                       key={video.id}
@@ -1817,7 +1825,7 @@ export default function App() {
               </div>
               <div className="dynamic-landings-header-feed">
                 {SPACEX_HISTORIC_EVENTS.map((event) => {
-                  const isActive = activeLowerReplay?.id === event.id || activeLowerReplay?.video_id === event.video_id;
+                  const isActive = selectedLaunch?.id === event.id || activeLowerReplay?.id === event.id;
                   return (
                     <div
                       key={event.id}
@@ -1836,6 +1844,30 @@ export default function App() {
                     >
                       <button 
                         onClick={() => {
+                          const customLaunch = {
+                            id: event.id,
+                            name: event.title,
+                            upcoming: false,
+                            date_utc: event.dateUtc || null,
+                            details: event.details,
+                            rocket_name: event.vehicle,
+                            launchpad_name: event.launchpad,
+                            links: {
+                              webcast: `https://www.youtube.com/watch?v=${event.video_id}`
+                            },
+                            cores: [
+                              {
+                                core: { serial: event.coreSerial || "Historic Core" },
+                                flight: event.flightNum || 1,
+                                reused: event.reused || false,
+                                landing_attempt: true,
+                                landing_success: true,
+                                landing_type: event.landingType || "LZ Landing",
+                              }
+                            ]
+                          };
+                          setSelectedLaunch(customLaunch);
+                          setActiveVideoId(event.video_id);
                           setActiveLowerReplay({ ...event, type: 'historic' });
                           addLog(`Loading historic flight archive webcast: ${event.title}`);
                         }}

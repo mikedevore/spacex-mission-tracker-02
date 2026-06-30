@@ -291,47 +291,90 @@ export default function LowerFeaturesArea({
         </section>
 
         {/* Drive Data Sync Section */}
-        <section className="bg-slate-900/60 border border-slate-700/50 rounded-2xl p-6 md:p-8 mt-12 w-[min(1400px,94vw)] mx-auto shadow-lg relative overflow-hidden backdrop-blur-sm">
-          <div className="absolute top-0 left-0 w-[2px] h-full bg-gradient-to-b from-cyan-400 to-blue-600 shadow-[0_0_10px_rgba(0,231,255,0.4)]"></div>
-          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-6 relative z-10">
-            <div className="flex-1">
-              <h2 className="text-xl font-space font-medium text-white mb-2 flex items-center gap-2">
-                <DownloadCloud className="w-5 h-5 text-cyan-400" />
+        <section style={{
+          background: 'rgba(15, 23, 42, 0.6)',
+          border: '1px solid rgba(100, 116, 139, 0.5)',
+          borderLeft: '3px solid #22d3ee',
+          borderRadius: '16px',
+          padding: '1.5rem 2rem',
+          marginTop: '3rem',
+          boxShadow: '0 4px 24px rgba(0,0,0,0.2)',
+          backdropFilter: 'blur(8px)',
+          boxSizing: 'border-box'
+        } as React.CSSProperties}>
+          <div style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '1.25rem'
+          }}>
+            <div style={{ flex: '1 1 260px', minWidth: 0 }}>
+              <h2 style={{ fontSize: '1.1rem', fontWeight: 500, color: '#fff', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem', fontFamily: '"Space Grotesk", sans-serif' }}>
+                <DownloadCloud style={{ width: '20px', height: '20px', color: '#22d3ee', flexShrink: 0 }} />
                 System Source Backup
               </h2>
-              <p className="text-slate-400 text-sm leading-relaxed max-w-2xl">
+              <p style={{ color: '#94a3b8', fontSize: '0.875rem', lineHeight: '1.6', margin: 0 }}>
                 Securely stream a local working copy of the current Mission Control transmission directly to your Google Drive ecosystem. Data transfers require active Google Workspace credentials to proceed.
               </p>
             </div>
-            <div className="flex-shrink-0 w-full md:w-auto">
+            <div style={{ flexShrink: 0 }}>
               {needsAuth ? (
-                 <button 
-                   onClick={handleLogin}
-                   disabled={isLoggingIn}
-                   className="w-full md:w-auto gsi-material-button bg-white hover:bg-slate-50 transition-colors rounded-md shadow-md border border-slate-200 p-1 flex items-center pr-4 disabled:opacity-50"
-                 >
-                   <div className="p-2 bg-white rounded-l-md mr-3">
-                     <svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" className="w-5 h-5 block">
-                       <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"></path>
-                       <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"></path>
-                       <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"></path>
-                       <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"></path>
-                       <path fill="none" d="M0 0h48v48H0z"></path>
-                     </svg>
-                   </div>
-                   <span className="font-roboto text-sm font-medium text-slate-600 tracking-wide">
-                     {isLoggingIn ? "Authenticating..." : "Sign in with Google"}
-                   </span>
-                 </button>
+                <button
+                  onClick={handleLogin}
+                  disabled={isLoggingIn}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '12px',
+                    background: '#fff',
+                    border: '1px solid #dadce0',
+                    borderRadius: '6px',
+                    padding: '8px 16px 8px 10px',
+                    cursor: isLoggingIn ? 'default' : 'pointer',
+                    opacity: isLoggingIn ? 0.6 : 1,
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.12)',
+                    whiteSpace: 'nowrap',
+                    fontSize: '14px',
+                    fontWeight: 500,
+                    color: '#3c4043',
+                    letterSpacing: '0.02em'
+                  }}
+                >
+                  <svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" style={{ width: '20px', height: '20px', display: 'block', flexShrink: 0 }}>
+                    <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"></path>
+                    <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"></path>
+                    <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"></path>
+                    <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"></path>
+                    <path fill="none" d="M0 0h48v48H0z"></path>
+                  </svg>
+                  {isLoggingIn ? "Authenticating..." : "Sign in with Google"}
+                </button>
               ) : (
-                 <button 
-                   onClick={handleBackupToDrive}
-                   disabled={isBackingUp}
-                   className="w-full md:w-auto bg-gradient-to-r from-cyan-600 to-blue-700 hover:from-cyan-500 hover:to-blue-600 text-white font-medium py-3 px-6 rounded-lg transition-all duration-300 shadow-[0_0_15px_rgba(0,231,255,0.2)] hover:shadow-[0_0_25px_rgba(0,231,255,0.4)] disabled:opacity-50 disabled:pointer-events-none flex items-center justify-center gap-2"
-                 >
-                   <DownloadCloud className={`w-4 h-4 ${isBackingUp ? 'animate-bounce' : ''}`} />
-                   {isBackingUp ? "Transmitting..." : "Push to Google Drive"}
-                 </button>
+                <button
+                  onClick={handleBackupToDrive}
+                  disabled={isBackingUp}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    background: 'linear-gradient(to right, #0891b2, #1d4ed8)',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: '8px',
+                    padding: '12px 24px',
+                    cursor: isBackingUp ? 'default' : 'pointer',
+                    opacity: isBackingUp ? 0.6 : 1,
+                    fontWeight: 500,
+                    fontSize: '14px',
+                    whiteSpace: 'nowrap',
+                    boxShadow: '0 0 15px rgba(0,231,255,0.2)',
+                    transition: 'all 0.3s'
+                  }}
+                >
+                  <DownloadCloud style={{ width: '16px', height: '16px' }} />
+                  {isBackingUp ? "Transmitting..." : "Push to Google Drive"}
+                </button>
               )}
             </div>
           </div>
@@ -340,8 +383,8 @@ export default function LowerFeaturesArea({
         {/* Dynamic Vector One Labs© subtler branding footer */}
         <footer className="vector-footer-logo-row pb-8">
           <img 
-            src={`/vector_one_logo.png?v=${Date.now()}`}
-            alt="Vector One AI Logo" 
+            src={`/vector_labs_logo.png?v=${Date.now()}`}
+            alt="Vector One Labs AI Logo" 
             referrerPolicy="no-referrer"
           />
         </footer>

@@ -1,4 +1,4 @@
-export const CACHE_TTL = 10 * 60 * 1000; // 10 minutes cache lifetime
+export const CACHE_TTL = 4 * 60 * 60 * 1000; // 4 hours — avoids LL2 rate limits on reload
 
 export function getCachedData<T>(key: string): T | null {
   try {
