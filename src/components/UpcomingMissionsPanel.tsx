@@ -9,6 +9,25 @@ interface UpcomingMissionsPanelProps {
 
 const ITEMS_PER_PAGE = 10;
 
+// Returns true only for a confirmed, mission-specific webcast destination.
+// Generic profile pages (x.com/SpaceX, twitter.com/SpaceX) are NOT accepted.
+function classifyWebcast(url: string): 'x-broadcast' | 'youtube' | 'spacex-launch' | null {
+  if (!url) return null;
+  if (/x\.com\/i\/broadcasts\//i.test(url))             return 'x-broadcast';
+  if (/youtube\.com\/(watch|live)|youtu\.be\//i.test(url)) return 'youtube';
+  if (/spacex\.com\/launches\//i.test(url))             return 'spacex-launch';
+  return null;
+}
+
+// Returns true if the URL is a specific mission info page (not a generic homepage).
+function isSpecificInfoPage(url: string): boolean {
+  if (!url) return false;
+  // Reject bare domain roots and known generic profile pages
+  if (/^https?:\/\/(www\.)?spacex\.com\/?$/i.test(url)) return false;
+  if (/^https?:\/\/(www\.)?(x|twitter)\.com\/?(@?SpaceX)?\/?$/i.test(url)) return false;
+  return /\bspacex\.com\b/i.test(url);
+}
+
 export default function UpcomingMissionsPanel({
   loading,
   filteredUpcoming,
@@ -44,8 +63,9 @@ export default function UpcomingMissionsPanel({
             {pagedUpcoming.map((mission) => {
               const isSelect = selectedLaunch && selectedLaunch.id === mission.id;
 
+              // ── Tier 1: direct confirmed webcast URL ──────────────────────
               const youtubeId = mission?.links?.youtube_id;
-              const directStream =
+              const rawWebcast =
                 mission?.links?.webcast ||
                 mission?.vid_urls?.[0]?.url ||
                 mission?.vidURLs?.[0]?.url ||
@@ -53,16 +73,30 @@ export default function UpcomingMissionsPanel({
                 mission?.ll2?.webcast ||
                 "";
 
-              const spacexInfoUrl = mission?.links?.spacexInfo || "";
-              const webcastUrl = directStream || spacexInfoUrl || "https://x.com/SpaceX";
+              const webcastType = classifyWebcast(rawWebcast);
 
-              const isXUrl       = /x\.com|twitter\.com/i.test(webcastUrl);
-              const isSpaceXPage = /\bspacex\.com\b/i.test(webcastUrl) && !isXUrl;
-              const watchLabel   = isXUrl
-                ? "Watch Live on X"
-                : isSpaceXPage
-                  ? "Watch on SpaceX.com"
-                  : "Watch Mission Live";
+              // ── Tier 2: mission-specific SpaceX info/launch page ──────────
+              const spacexInfoUrl = mission?.links?.spacexInfo || "";
+              const hasInfoPage = isSpecificInfoPage(spacexInfoUrl);
+
+              // ── Build button ──────────────────────────────────────────────
+              let watchUrl   = "";
+              let watchLabel = "";
+
+              if (webcastType === 'x-broadcast') {
+                watchUrl   = rawWebcast;
+                watchLabel = "Watch Live on X";
+              } else if (webcastType === 'youtube') {
+                watchUrl   = rawWebcast;
+                watchLabel = "Watch on YouTube";
+              } else if (webcastType === 'spacex-launch') {
+                watchUrl   = rawWebcast;
+                watchLabel = "Watch on SpaceX.com";
+              } else if (hasInfoPage) {
+                watchUrl   = spacexInfoUrl;
+                watchLabel = "Mission Page";
+              }
+              // If nothing: watchUrl stays "" → no button rendered
 
               return (
                 <div
@@ -84,17 +118,32 @@ export default function UpcomingMissionsPanel({
                       })}
                     </span>
                   </div>
-                  <div className="feed-links">
-                    <a
-                      className="feed-video-link"
-                      href={webcastUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      onClick={(e) => { e.stopPropagation(); }}
-                    >
-                      {watchLabel}
-                    </a>
-                  </div>
+                  {watchUrl ? (
+                    <div className="feed-links">
+                      <a
+                        className="feed-video-link"
+                        href={watchUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => { e.stopPropagation(); }}
+                      >
+                        {watchLabel}
+                      </a>
+                    </div>
+                  ) : (
+                    <div className="feed-links">
+                      <span style={{
+                        color: '#334155',
+                        fontSize: '10px',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.1em',
+                        fontWeight: 600,
+                        userSelect: 'none'
+                      }}>
+                        Broadcast Not Yet Announced
+                      </span>
+                    </div>
+                  )}
                 </div>
               );
             })}

@@ -410,7 +410,7 @@ export default function App() {
       let llUpcoming: any[] = [];
       
       const cachedPast = !forceRefresh ? getCachedData<any[]>("spacex-cache-past-v12") : null;
-      const cachedUpcoming = !forceRefresh ? getCachedData<any[]>("spacex-cache-upcoming-v6") : null;
+      const cachedUpcoming = !forceRefresh ? getCachedData<any[]>("spacex-cache-upcoming-v7") : null;
 
       if (cachedPast && cachedUpcoming) {
         pastMissions = cachedPast;
@@ -467,11 +467,11 @@ export default function App() {
 
           if (llUpcoming.length === 0) throw new Error("LL2 returned no future SpaceX launches");
 
-          setCachedData("spacex-cache-upcoming-v6", llUpcoming);
+          setCachedData("spacex-cache-upcoming-v7", llUpcoming);
           addLog(`Retrieved ${llUpcoming.length} future missions from Launch Library 2.`);
         } catch (err: any) {
           addLog(`Future manifest offline: ${err.message}. Checking stale browser cache...`);
-          const staleUpcoming = getStaleCachedData<any[]>("spacex-cache-upcoming-v6");
+          const staleUpcoming = getStaleCachedData<any[]>("spacex-cache-upcoming-v7");
           if (staleUpcoming) {
             llUpcoming = staleUpcoming;
             addLog("Successfully restored stale future manifest cache.");
@@ -510,7 +510,7 @@ export default function App() {
                 llUpcoming = FALLBACK_UPCOMING;
               }
 
-              setCachedData("spacex-cache-upcoming-v6", llUpcoming);
+              setCachedData("spacex-cache-upcoming-v7", llUpcoming);
               addLog(`Successfully parsed ${llUpcoming.length} upcoming launches from SpaceX API.`);
             } catch (subErr: any) {
               addLog(`SpaceX V4 fallback failed: ${subErr.message}. Utilizing local backup calendar.`, true);
@@ -575,7 +575,7 @@ export default function App() {
           const past = prev.filter((l: any) => !l.upcoming);
           return past.concat(llUpcoming);
         });
-        setCachedData("spacex-cache-upcoming-v6", llUpcoming);
+        setCachedData("spacex-cache-upcoming-v7", llUpcoming);
         addLog(`Live feed sync: ${llUpcoming.length} upcoming missions updated.`);
       } catch (e: any) {
         addLog(`Live feed sync: LL2 unavailable (${e.message}). Retaining current manifest.`);
@@ -864,16 +864,16 @@ export default function App() {
     );
   }, [upcomingLaunchesList]);
 
-  // Async-resolve exact X broadcast URLs for the first 5 upcoming missions.
-  // Mirrors reference project's _resolveWebcastUrl flow:
-  //   1. LL2 single-launch endpoint (dev host) → vidURLs (populated even when bulk list is empty)
+  // Async-resolve exact webcast URLs for the 15 soonest upcoming missions.
+  // Uses filteredUpcoming (sorted by date ascending) so we always resolve the nearest missions first.
+  //   1. LL2 single-launch endpoint → vidURLs (populated even when bulk list is empty)
   //   2. infoURLs from that detail → spacex.com page scrape → x.com/i/broadcasts/XXXXX
   //   3. spacexInfo from bulk list as last resort
   const _resolvedBroadcastIds = useRef<Set<string>>(new Set());
-  const _upcomingIdsKey = upcomingLaunchesList.map(m => m.id).join(',');
+  const _upcomingIdsKey = filteredUpcoming.slice(0, 15).map(m => m.id).join(',');
   useEffect(() => {
-    const toResolve = upcomingLaunchesList
-      .slice(0, 5)
+    const toResolve = filteredUpcoming
+      .slice(0, 15)
       .filter(m =>
         m.id?.startsWith('ll2-') &&
         !m.links?.webcast &&
