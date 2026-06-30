@@ -1,0 +1,12 @@
+Hello AI Assistant,
+
+I am providing to you the backup files for my SpaceX Mission Tracker project. Please follow these exact steps to perform a complete recovery of this project:
+
+1. **Acknowledge and Check Context**: Confirm that you have received the uploaded project files (either as individual files or extracted from a ZIP archive). Do not make any assumptions; use your `list_dir` tool on `/src` and `/` to verify the codebase structure exists.
+2. **Install Dependencies**: Immediately run the `install_applet_dependencies` tool (or `npm install`) to ensure all necessary Node.js packages (React, Vite, Lucide-React, etc.) are installed.
+3. **Verify Master File**: Use `view_file` to ensure `src/App.tsx` and the `src/components/` directory are intact.
+4. **Compile the Applet**: Call your `compile_applet` tool to ensure the TypeScript/React application builds without any errors. 
+5. **Start Dev Server**: If compilation succeeds, call the `restart_dev_server` tool to bring the application online.
+6. **Completion**: Stop calling tools and reply to me confirming: "Recovery complete! All systems are green and the development server is running."
+
+Please execute these steps sequentially and meticulously.
